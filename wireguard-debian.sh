@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #================================================================================
-# 适用于 Debian 的 WireGuard + Udp2raw 一键安装脚本 (已修复下载问题)
+# 适用于 Debian 的 WireGuard + Udp2raw 一键安装脚本
 #
 # 功能:
 # 1. 安装 WireGuard (可选集成 Udp2raw)
@@ -39,16 +39,21 @@ rand_port() {
 
 # 安装 WireGuard
 wireguard_install() {
+	# 检查是否已安装
 	if [ -f /etc/wireguard/wg0.conf ]; then
-		echo "检测到 WireGuard 已安装 (/etc/wireguard/wg0.conf 存在)。无需重复安装。"
+		echo "检测到 WireGuard 已安装 (/etc/wireguard/wg0.conf 存在)。"
+		echo "无需重复安装。如果您想添加新用户，请选择主菜单的'添加新用户'选项。"
 		exit 0
 	fi
 
+	# 询问是否启用 udp2raw
+	echo
 	read -r -p "是否启用 TCP 伪装 (udp2raw)？[y/N]: " use_udp2raw
-	use_udp2raw=$(echo "$use_udp2raw" | tr '[:upper:]' '[:lower:]')
+	use_udp2raw=$(echo "$use_udp2raw" | tr '[:upper:]' '[:lower:]') # 转为小写
 
 	echo "正在更新软件包列表..."
 	apt-get update
+
 	echo "正在安装 WireGuard 及相关工具..."
 	apt-get install -y wireguard qrencode ufw curl linux-headers-amd64
 
@@ -66,66 +71,75 @@ wireguard_install() {
 	c2=$(cat cpublickey)
 
 	server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
-	wg_port=$(rand_port)
+	wg_port=$(rand_port) # WireGuard 的 UDP 端口
 
 	echo "配置系统网络转发..."
 	sed -i '/net.ipv4.ip_forward=1/s/^#//' /etc/sysctl.conf
-	if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then echo "net.ipv4.ip_forward=1" >>/etc/sysctl.conf; fi
+	if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
+		echo "net.ipv4.ip_forward=1" >>/etc/sysctl.conf
+	fi
 	sysctl -p
 
 	echo "配置防火墙 (UFW)..."
 	ufw allow ssh
 
+	# 根据是否使用 udp2raw 配置防火墙和客户端
 	local client_endpoint
 	if [ "$use_udp2raw" == "y" ]; then
 		echo "正在为您配置 udp2raw..."
-		tcp_port=$(rand_port)
+		tcp_port=$(rand_port) # udp2raw 监听的 TCP 端口
 		udp2raw_password=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
 
 		echo "开放 udp2raw 的 TCP 端口: $tcp_port"
-
 		ufw allow "$tcp_port"/tcp
 
+		# 安装 udp2raw
 		echo "正在下载并安装 udp2raw..."
-		# 作者已停止更新，直接使用固定链接以提高稳定性和速度
 		UDP2RAW_URL="https://github.com/wangyu-/udp2raw/releases/download/20230206.0/udp2raw_binaries.tar.gz"
 
 		echo "使用下载链接: $UDP2RAW_URL"
 		if ! curl -L -o udp2raw_binaries.tar.gz "$UDP2RAW_URL"; then
-			echo "错误: 使用 curl 下载 udp2raw 失败。请检查网络或链接是否有效。"
+			echo "错误: 下载 udp2raw_binaries.tar.gz 失败。"
 			exit 1
 		fi
-		if [ ! -s udp2raw_binaries.tar.gz ] || [ "$(stat -c%s "udp2raw_binaries.tar.gz")" -lt 10000 ]; then
-			echo "错误: 下载的文件大小异常，可能不是有效的压缩包。"
-			rm -f udp2raw_binaries.tar.gz
-			exit 1
-		fi
+
 		if ! tar -xzf udp2raw_binaries.tar.gz; then
 			echo "错误: 解压 udp2raw_binaries.tar.gz 失败。"
 			exit 1
 		fi
-		if [ -f "udp2raw_binaries/udp2raw_amd64" ]; then mv udp2raw_binaries/udp2raw_amd64 /usr/local/bin/udp2raw; else
-			echo "错误: 在解压的文件中未找到 udp2raw_amd64。"
-			rm -rf udp2raw_binaries*
+
+		if [ -f "udp2raw_binaries/udp2raw_amd64" ]; then
+			mv "udp2raw_binaries/udp2raw_amd64" /usr/local/bin/udp2raw
+		else
+			echo "错误: 在解压的文件中未找到 udp2raw_binaries/udp2raw_amd64。"
+			rm -rf udp2raw_binaries udp2raw_binaries.tar.gz
 			exit 1
 		fi
 
 		rm -rf udp2raw_binaries udp2raw_binaries.tar.gz
 
+		# 创建 systemd 服务
 		echo "正在创建 udp2raw 系统服务..."
 		cat >/etc/systemd/system/udp2raw.service <<-EOF
 			[Unit]
 			Description=udp2raw-tunnel server
 			After=network.target
+
 			[Service]
 			Type=simple
 			ExecStart=/usr/local/bin/udp2raw -s -l 0.0.0.0:$tcp_port -r 127.0.0.1:$wg_port -k "$udp2raw_password" --raw-mode faketcp -a
 			Restart=on-failure
+			RestartSec=5
+
 			[Install]
 			WantedBy=multi-user.target
 		EOF
-		systemctl daemon-reload && systemctl enable udp2raw && systemctl start udp2raw
-		client_endpoint="127.0.0.1:29999"
+
+		systemctl daemon-reload
+		systemctl enable udp2raw
+		systemctl start udp2raw
+
+		client_endpoint="127.0.0.1:29999" # 客户端本地 udp2raw 监听的端口
 	else
 		echo "开放 WireGuard 的 UDP 端口: $wg_port"
 		ufw allow "$wg_port"/udp
@@ -207,8 +221,10 @@ wireguard_install() {
 # 卸载 WireGuard
 wireguard_uninstall() {
 	echo "正在停止并禁用 WireGuard 和 udp2raw 服务..."
-	systemctl stop wg-quick@wg0 && systemctl disable wg-quick@wg0
-	systemctl stop udp2raw &>/dev/null && systemctl disable udp2raw &>/dev/null
+	systemctl stop wg-quick@wg0
+	systemctl disable wg-quick@wg0
+	systemctl stop udp2raw &>/dev/null || true
+	systemctl disable udp2raw &>/dev/null || true
 
 	echo "正在卸载 WireGuard 及相关软件包..."
 	apt-get remove --purge -y wireguard wireguard-tools qrencode
@@ -219,15 +235,18 @@ wireguard_uninstall() {
 	rm -f /usr/local/bin/udp2raw
 	systemctl daemon-reload
 
-	echo "跳过防火墙重置，以避免影响宝塔面板等服务。请手动删除相关端口。"
+	echo "跳过防火墙重置，以避免影响宝塔面板等服务。"
+	echo "请手动删除为 WireGuard 或 udp2raw 开放的端口。"
 
-	echo -e "\n🎉 WireGuard 及 Udp2raw 已成功卸载。"
+	echo -e "\n=============================================================="
+	echo "🎉 WireGuard 及 Udp2raw 已成功卸载。"
+	echo "=============================================================="
 }
 
 # 添加新客户端
 add_new_client() {
 	if [ ! -f /etc/wireguard/wg0.conf ]; then
-		echo "错误: WireGuard 尚未安装。"
+		echo "错误: WireGuard 尚未安装。请先选择选项 1 进行安装。"
 		exit 1
 	fi
 
@@ -256,7 +275,13 @@ add_new_client() {
 	new_client_public_key=$(echo "$new_client_private_key" | wg pubkey)
 
 	echo "正在更新服务器配置..."
-	echo -e "\n[Peer]\n# Client: $client_name\nPublicKey = $new_client_public_key\nAllowedIPs = $new_client_ip" >>/etc/wireguard/wg0.conf
+	cat >>/etc/wireguard/wg0.conf <<-EOF
+
+		[Peer]
+		# Client: $client_name
+		PublicKey = $new_client_public_key
+		AllowedIPs = $new_client_ip
+	EOF
 
 	echo "正在创建客户端配置文件 /etc/wireguard/${client_name}.conf..."
 	server_public_key=$(cat /etc/wireguard/spublickey)
@@ -286,7 +311,8 @@ add_new_client() {
 	chmod 600 "/etc/wireguard/${client_name}.conf"
 
 	echo "正在重新加载 WireGuard 服务..."
-	systemctl restart wg-quick@wg0
+	wg-quick strip wg0 >current.conf && wg-quick set wg0 peer "$new_client_public_key" allowed-ips "$new_client_ip"
+	rm current.conf
 
 	echo -e "\n=============================================================="
 	echo "🎉 新客户端 '$client_name' 添加成功! 🎉"
