@@ -65,6 +65,7 @@ wireguard_install(){
 	wg genkey | tee cprivatekey | wg pubkey > cpublickey
 	chmod 600 sprivatekey cprivatekey
 
+
 	s1=$(cat sprivatekey)
 	s2=$(cat spublickey)
 	c1=$(cat cprivatekey)
