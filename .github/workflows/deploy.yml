@@ -1,0 +1,25 @@
+name: Deploy wireguard-debian.sh to server
+
+on:
+  push:
+    paths:
+      - "wireguard-debian.sh"   # 只在这个文件更新时触发
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Copy file to server via SCP
+        uses: garygrossgarten/github-action-scp@release
+        with:
+          local: wireguard-debian.sh
+          remote: /root/wireguard-debian.sh   # 服务器目标路径
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          privateKey: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
