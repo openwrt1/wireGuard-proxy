@@ -71,8 +71,7 @@ wireguard_install() {
 	c2=$(cat cpublickey)
 
 	server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
-    wg_port=$(rand_port) # WireGuard 的 UDP 端口
-
+    
 	echo "配置系统网络转发..."
 	sed -i '/net.ipv4.ip_forward=1/s/^#//' /etc/sysctl.conf
 	if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
@@ -85,9 +84,11 @@ wireguard_install() {
 
     # 根据是否使用 udp2raw 配置防火墙和客户端
     local client_endpoint
+    local wg_port
     if [ "$use_udp2raw" == "y" ]; then
-        echo "正在为您配置 udp2raw..."
-        tcp_port=$(rand_port) # udp2raw 监听的 TCP 端口
+        read -r -p "请输入 udp2raw 的 TCP 端口 [默认: 39001]: " tcp_port
+        tcp_port=${tcp_port:-39001}
+        wg_port=$(rand_port) # 内部 WG 端口保持随机
         udp2raw_password=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
         
         echo "开放 udp2raw 的 TCP 端口: $tcp_port"
@@ -166,6 +167,9 @@ wireguard_install() {
         
         client_endpoint="127.0.0.1:29999" # 客户端本地 udp2raw 监听的端口
     else
+        read -r -p "请输入 WireGuard 的 UDP 端口 [默认: 39000]: " wg_port
+        wg_port=${wg_port:-39000}
+
         echo "开放 WireGuard 的 UDP 端口: $wg_port"
         ufw allow "$wg_port"/udp
         client_endpoint="$server_ip:$wg_port"
