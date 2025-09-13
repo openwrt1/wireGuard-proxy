@@ -95,27 +95,32 @@ wireguard_install() {
 
         # 安装 udp2raw
         echo "正在下载并安装 udp2raw..."
-        # 修正: udp2raw 作者修改了 release asset 的命名, 因此更新 grep pattern
-        UDP2RAW_URL=$(curl -s "https://api.github.com/repos/wangyu-/udp2raw-tunnel/releases/latest" | grep "browser_download_url.*udp2raw_binaries.tar.gz" | cut -d '"' -f 4)
+        # 使用您发现的稳定链接，感谢！
+        UDP2RAW_URL="https://github.com/wangyu-/udp2raw/releases/download/20230206.0/udp2raw_binaries.tar.gz"
         
-        # 增加备用链接，防止 API 失效或被限速
-        if [ -z "$UDP2RAW_URL" ]; then
-            echo "警告: 无法通过 GitHub API 自动获取 udp2raw 下载链接。"
-            echo "正在尝试使用固定的备用链接..."
-            UDP2RAW_URL="https://github.com/wangyu-/udp2raw-tunnel/releases/download/20240225.0/udp2raw_binaries.tar.gz"
-        fi
-
         echo "使用下载链接: $UDP2RAW_URL"
         curl -L -o udp2raw.tar.gz "$UDP2RAW_URL"
 
-        if ! tar -xzf udp2raw.tar.gz; then
-            echo "错误: 下载或解压 udp2raw.tar.gz 失败。请检查网络或链接。"
+        if [ ! -s udp2raw.tar.gz ]; then
+            echo "错误: 下载 udp2raw.tar.gz 失败或文件为空。"
+            exit 1
+        fi
+
+        tar -xzf udp2raw.tar.gz
+        UDP2RAW_BINARY=$(find . -name "udp2raw_amd64" | head -n 1)
+
+        if [ -z "$UDP2RAW_BINARY" ]; then
+            echo "错误: 在解压的文件中找不到 udp2raw_amd64。"
             rm -f udp2raw.tar.gz
             exit 1
         fi
+
+        echo "找到 udp2raw 二进制文件: $UDP2RAW_BINARY"
+        mv "$UDP2RAW_BINARY" /usr/local/bin/udp2raw
         
-        mv udp2raw_amd64 /usr/local/bin/udp2raw
-        rm -f udp2raw.tar.gz udp2raw_*
+        # 清理
+        rm -f udp2raw.tar.gz
+        rm -rf udp2raw_binaries*
 
         # 创建 systemd 服务
         echo "正在创建 udp2raw 系统服务..."
@@ -264,6 +269,9 @@ add_new_client() {
     new_client_public_key=$(echo "$new_client_private_key" | wg pubkey)
 
     echo "正在更新服务器配置..."
+    # 使用 wg set 命令动态更新，而不是直接写文件，更安全
+    wg set wg0 peer "$new_client_public_key" allowed-ips "$new_client_ip"
+    # 为了持久化，仍然需要写入配置文件
     cat >> /etc/wireguard/wg0.conf <<-EOF
 
 		[Peer]
@@ -278,10 +286,8 @@ add_new_client() {
     # 决定 Endpoint
     local client_endpoint
     if systemctl -q is-active udp2raw; then
-        # udp2raw 正在运行，客户端应连接本地
         client_endpoint="127.0.0.1:29999"
     else
-        # 标准模式，客户端连接公网
         server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
         server_port=$(grep -oP 'ListenPort = \K[0-9]+' /etc/wireguard/wg0.conf)
         client_endpoint="$server_ip:$server_port"
@@ -302,9 +308,9 @@ add_new_client() {
 	EOF
 	chmod 600 "/etc/wireguard/${client_name}.conf"
 
-    echo "正在同步 WireGuard 配置以应用更改..."
-    # 'syncconf' is better than a full restart as it doesn't drop existing connections.
-    wg syncconf wg0 <(cat /etc/wireguard/wg0.conf)
+    echo "正在同步 WireGuard 配置..."
+    # 使用 syncconf 比重启服务更高效
+    wg syncconf wg0 <(wg-quick strip wg0)
 
     echo -e "\n=============================================================="
     echo "🎉 新客户端 '$client_name' 添加成功! 🎉"
