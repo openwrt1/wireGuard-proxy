@@ -53,10 +53,14 @@ wireguard_install() {
 		echo "错误: 无法创建目录 /etc/wireguard。请检查权限或磁盘空间。" >&2
 		exit 1
 	fi
+	# 设置安全权限
+	chmod 700 /etc/wireguard
 	cd /etc/wireguard || { echo "错误: 无法切换到目录 /etc/wireguard。请检查目录是否存在且为有效目录。" >&2; exit 1; }
 
 	wg genkey | tee sprivatekey | wg pubkey >spublickey
 	wg genkey | tee cprivatekey | wg pubkey >cpublickey
+	# 设置密钥文件的权限
+	chmod 600 sprivatekey cprivatekey
 
 	s1=$(cat sprivatekey)
 	s2=$(cat spublickey)
@@ -117,8 +121,14 @@ wireguard_install() {
 	echo "正在创建客户端配置文件 client.conf..."
 	config_client
 
+	# 设置配置文件权限
+	chmod 600 /etc/wireguard/*.conf
+
 	echo "启动 WireGuard 服务..."
-	wg-quick up wg0
+	# 先尝试静默关闭已存在的接口，以避免 "wg0 already exists" 的警告
+	wg-quick down wg0 &>/dev/null || true
+	# 启动新的 wg0 接口
+	wg-quick up wg0 || { echo "错误: 启动 WireGuard 接口 wg0 失败。" >&2; exit 1; }
 	systemctl enable wg-quick@wg0
 
 	echo -e "\n=============================================================="
@@ -144,15 +154,127 @@ wireguard_uninstall() {
 	echo "正在清理配置文件..."
 	rm -rf /etc/wireguard
 
-	echo "正在重置防火墙规则 (UFW)..."
-	# ufw reset 会禁用防火墙，需要用户确认
-	ufw --force reset
-	echo "防火墙已重置并禁用。"
+	echo "跳过防火墙重置，以避免影响宝塔面板等服务。"
+	echo "请手动删除为 WireGuard 开放的端口。"
+	# echo "正在重置防火墙规则 (UFW)..."
+	# # ufw reset 会禁用防火墙，需要用户确认
+	# ufw --force reset
+	# echo "防火墙已重置并禁用。"
 
 	echo -e "\n=============================================================="
 	echo "🎉 WireGuard 已成功卸载。"
 	echo "=============================================================="
 }
+
+# 添加新客户端
+add_new_client() {
+    # 检查 WireGuard 是否已安装
+    if [ ! -f /etc/wireguard/wg0.conf ]; then
+        echo "错误: WireGuard 尚未安装。请先选择选项 1 进行安装。"
+        exit 1
+    fi
+
+    echo
+    read -r -p "请输入新客户端的名称 (例如: phone, laptop): " client_name
+
+    # 检查名称是否为空
+    if [ -z "$client_name" ]; then
+        echo "错误: 客户端名称不能为空。"
+        exit 1
+    fi
+
+    # 简单的名称清理，移除特殊字符
+    client_name=$(echo "$client_name" | tr -dc '[:alnum:]_-')
+
+    # 检查配置文件是否已存在
+    if [ -f "/etc/wireguard/${client_name}.conf" ]; then
+        echo "错误: 名为 ${client_name} 的客户端配置已存在。"
+        exit 1
+    fi
+
+    # --- 查找下一个可用的 IP 地址 ---
+    # 查找 wg0.conf 中最后一个 AllowedIPs 的 IP
+    last_ip=$(grep -oP 'AllowedIPs = 10.0.0.\K[0-9]+' /etc/wireguard/wg0.conf | sort -n | tail -1)
+    
+    # 如果没有找到 IP (比如初始安装后只有一个 peer)，则从 2 开始
+    if [ -z "$last_ip" ]; then
+        next_ip_octet=2
+    else
+        next_ip_octet=$((last_ip + 1))
+    fi
+
+    # 检查 IP 是否超出范围
+    if [ "$next_ip_octet" -gt 254 ]; then
+        echo "错误: IP 地址池已满 (10.0.0.2-10.0.0.254)。"
+        exit 1
+    fi
+
+    new_client_ip="10.0.0.${next_ip_octet}/32"
+    echo "为新客户端分配的 IP 地址: 10.0.0.${next_ip_octet}"
+
+    # --- 生成客户端密钥 ---
+    cd /etc/wireguard || exit
+    new_client_private_key=$(wg genkey)
+    new_client_public_key=$(echo "$new_client_private_key" | wg pubkey)
+	# 临时保存密钥，并设置权限
+	echo "$new_client_private_key" > "${client_name}_privatekey"
+	echo "$new_client_public_key" > "${client_name}_publickey"
+	chmod 600 "${client_name}_privatekey" "${client_name}_publickey"
+
+
+    # --- 更新服务器配置 ---
+    echo "正在更新服务器配置..."
+    cat >>/etc/wireguard/wg0.conf <<-EOF
+
+		[Peer]
+		# Client: $client_name
+		PublicKey = $new_client_public_key
+		AllowedIPs = $new_client_ip
+	EOF
+
+    # --- 创建客户端配置文件 ---
+    echo "正在创建客户端配置文件 /etc/wireguard/${client_name}.conf..."
+    # 获取服务器信息
+    server_public_key=$(cat /etc/wireguard/spublickey)
+	# 从 wg0.conf 获取 Endpoint IP 和 Port，更可靠
+    server_ip=$(grep -oP 'Endpoint = \K[^:]+' /etc/wireguard/client.conf) # 沿用初始IP
+    server_port=$(grep -oP 'ListenPort = \K[0-9]+' /etc/wireguard/wg0.conf)
+
+
+    cat >"/etc/wireguard/${client_name}.conf" <<-EOF
+		[Interface]
+		PrivateKey = $new_client_private_key
+		Address = 10.0.0.${next_ip_octet}/24
+		DNS = 8.8.8.8
+		MTU = 1420
+
+		[Peer]
+		PublicKey = $server_public_key
+		Endpoint = $server_ip:$server_port
+		AllowedIPs = 0.0.0.0/0, ::/0
+		PersistentKeepalive = 25
+	EOF
+	
+	# 设置新配置文件的权限
+	chmod 600 "/etc/wireguard/${client_name}.conf"
+
+    # --- 重启服务并显示结果 ---
+    echo "正在重新加载 WireGuard 服务..."
+    systemctl restart wg-quick@wg0
+
+    echo -e "\n=============================================================="
+    echo "🎉 新客户端 '$client_name' 添加成功! 🎉"
+    echo "=============================================================="
+    echo "客户端配置文件: /etc/wireguard/${client_name}.conf"
+    echo "扫描下面的二维码以导入配置:"
+    echo ""
+    qrencode -t ansiutf8 <"/etc/wireguard/${client_name}.conf"
+    echo "=============================================================="
+	
+	# 清理临时密钥文件
+	rm -f "${client_name}_privatekey" "${client_name}_publickey"
+}
+
 
 # 菜单
 start_menu() {
@@ -162,13 +284,15 @@ start_menu() {
 	echo "=================================================="
 	echo "1. 安装 WireGuard"
 	echo "2. 卸载 WireGuard"
-	echo "3. 退出脚本"
+	echo "3. 添加新用户"
+	echo "4. 退出脚本"
 	echo
-	read -r -p "请输入数字 [1-3]: " num
+	read -r -p "请输入数字 [1-4]: " num
 	case "$num" in
 	1) wireguard_install ;;
 	2) wireguard_uninstall ;;
-	3) exit 0 ;;
+	3) add_new_client ;;
+	4) exit 0 ;;
 	*)
 		echo "错误: 请输入正确的数字"
 		sleep 2
