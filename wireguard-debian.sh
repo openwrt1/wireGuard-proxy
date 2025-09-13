@@ -60,6 +60,10 @@ wireguard_install(){
     s2=$(cat spublickey)
     c1=$(cat cprivatekey)
     c2=$(cat cpublickey)
+    echo "服务端私钥 (s1): $s1"
+echo "服务端公钥 (s2): $s2"
+echo "客户端私钥 (c1): $c1"
+echo "客户端公钥 (c2): $c2"
 
 # 优先取 IPv4，没有就取 IPv6
 server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
