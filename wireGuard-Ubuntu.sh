@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ==================================================
-# 介绍：适用于 Ubuntu 18.04+ 的 WireGuard 一键安装脚本
-# 作者：Gemini Code Assist (参照 atrandys 的 CentOS 脚本)
+# 介绍：适用于 Debian/Ubuntu/CentOS 的 WireGuard 一键安装脚本
+# 作者：Gemini Code Assist (融合 atrandys 的脚本逻辑)
 # ==================================================
 
 # 判断是否为 root 用户
@@ -11,17 +11,12 @@ if [ "$(id -u)" != "0" ]; then
    exit 1
 fi
 
-# 判断系统是否为 Ubuntu
-if ! grep -q "Ubuntu" /etc/issue; then
-    echo "错误: 此脚本仅支持 Ubuntu 系统"
-    exit 1
-fi
+# --- 通用函数 ---
 
 # 生成随机端口
 rand_port(){
     min=10000
     max=60000
-    # 使用系统内置的 $RANDOM 变量，更简单
     echo $(($RANDOM % ($max - $min) + $min))
 }
 
@@ -42,51 +37,74 @@ PersistentKeepalive = 25
 EOF
 }
 
-# Ubuntu 安装 WireGuard
-wireguard_install(){
-    echo "正在更新软件包列表..."
+# --- 特定系统的安装函数 ---
+
+# Debian/Ubuntu 安装流程
+install_debian() {
+    echo "正在为 Debian/Ubuntu 系统安装 WireGuard..."
     apt-get update
+    # 安装 wireguard, qrencode (用于生成二维码), ufw (防火墙)
+    apt-get install -y wireguard qrencode ufw
 
-    echo "正在安装 WireGuard 及相关工具..."
-    # Ubuntu 20.04+ 自带 wireguard 包，18.04 需要 PPA，但 apt 会自动处理
-    apt-get install -y wireguard qrencode
+    echo "配置防火墙 (UFW)..."
+    ufw allow ssh
+    ufw allow $port/udp
+    ufw --force enable
 
+    # 配置 UFW 的 NAT 转发规则
+    if ! grep -q "POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE" /etc/ufw/before.rules; then
+        sed -i "1s;^;*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE\nCOMMIT\n;" /etc/ufw/before.rules
+    fi
+    sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+    ufw reload
+}
+
+# CentOS/RHEL 安装流程
+install_centos() {
+    echo "正在为 CentOS/RHEL 系统安装 WireGuard..."
+    # 安装 EPEL 源和 WireGuard 源
+    yum install -y epel-release
+    curl -Lo /etc/yum.repos.d/wireguard.repo https://copr.fedorainfracloud.org/coprs/jdoss/wireguard/repo/epel-7/jdoss-wireguard-epel-7.repo
+    # 安装 wireguard 和 qrencode
+    yum install -y wireguard-tools qrencode
+
+    echo "配置防火墙 (firewalld)..."
+    # 优先使用 firewalld，更现代
+    systemctl start firewalld
+    systemctl enable firewalld
+    firewall-cmd --zone=public --add-port=$port/udp --permanent
+    firewall-cmd --zone=public --add-masquerade --permanent
+    firewall-cmd --reload
+}
+
+
+# --- 主安装逻辑 ---
+
+wireguard_install(){
+    # 1. 检测操作系统
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+    else
+        echo "错误: 无法检测到操作系统类型。"
+        exit 1
+    fi
+
+    # 2. 通用准备工作
     echo "正在创建 WireGuard 目录和密钥..."
     mkdir -p /etc/wireguard
     cd /etc/wireguard
 
-    # 生成服务器和客户端密钥
     wg genkey | tee sprivatekey | wg pubkey > spublickey
     wg genkey | tee cprivatekey | wg pubkey > cpublickey
 
-    # 读取密钥到变量
     s1=$(cat sprivatekey)
     s2=$(cat spublickey)
     c1=$(cat cprivatekey)
     c2=$(cat cpublickey)
 
-    # 获取服务器公网 IP 和随机端口
     server_ip=$(curl -s icanhazip.com)
     port=$(rand_port)
-
-    echo "配置系统网络转发..."
-    # 开启 IPv4 转发
-    sed -i '/net.ipv4.ip_forward=1/s/^#//' /etc/sysctl.conf
-    if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
-        echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-    fi
-    sysctl -p
-
-    echo "配置防火墙 (UFW)..."
-    # 安装 UFW (如果未安装)
-    apt-get install -y ufw
-    
-    # 允许 SSH, WireGuard 端口，并开启防火墙
-    ufw allow ssh
-    ufw allow $port/udp
-    ufw --force enable
-
-    # 自动检测主网络接口 (如 eth0, ens3)
     net_interface=$(ip -o -4 route show to default | awk '{print $5}')
     if [ -z "$net_interface" ]; then
         echo "错误: 无法检测到主网络接口"
@@ -94,28 +112,38 @@ wireguard_install(){
     fi
     echo "检测到主网络接口为: $net_interface"
 
-    # 配置 UFW 的 NAT 转发规则
-    # 在 /etc/ufw/before.rules 文件顶部添加 NAT 配置
-    if ! grep -q "POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE" /etc/ufw/before.rules; then
-        sed -i "1s;^;*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE\nCOMMIT\n;" /etc/ufw/before.rules
+    # 3. 开启IP转发 (通用)
+    echo "配置系统网络转发..."
+    if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
+        echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+    fi
+    sysctl -p
+
+    # 4. 根据操作系统执行特定安装
+    if [ "$OS" == "ubuntu" ] || [ "$OS" == "debian" ]; then
+        install_debian
+    elif [ "$OS" == "centos" ] || [ "$OS" == "rhel" ]; then
+        # CentOS 7 内核版本过低，需要升级才能使用 WireGuard
+        if [ "$OS" == "centos" ] && grep -q "7\." /etc/redhat-release; then
+             echo "警告: CentOS 7 需要升级内核才能使用 WireGuard。此脚本暂未包含自动内核升级，请手动升级或使用 CentOS 8+。"
+             # 此处可以集成之前的内核升级脚本，但为保持简洁，暂时只做提示
+             # exit 1
+        fi
+        install_centos
+    else
+        echo "错误: 不支持的操作系统: $OS"
+        exit 1
     fi
 
-    # 确保 UFW 默认转发策略为 ACCEPT
-    sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
-    
-    # 重启 UFW 使配置生效
-    ufw reload
-
+    # 5. 创建配置文件并启动服务 (通用)
     echo "正在创建服务器配置文件 wg0.conf..."
+    # 对于CentOS，如果使用firewalld，PostUp/Down规则也不再需要
 cat > /etc/wireguard/wg0.conf <<-EOF
 [Interface]
 PrivateKey = $s1
 Address = 10.0.0.1/24
 ListenPort = $port
 MTU = 1420
-# PostUp/PostDown 规则由 UFW 处理，这里不再需要
-# PostUp   = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o $net_interface -j MASQUERADE
-# PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o $net_interface -j MASQUERADE
 
 [Peer]
 PublicKey = $c2
@@ -125,12 +153,11 @@ EOF
     echo "正在创建客户端配置文件 client.conf..."
     config_client
 
-    echo "启动 WireGuard 服务..."
+    echo "启动并设置 WireGuard 开机自启..."
     wg-quick up wg0
-    
-    echo "设置 WireGuard 开机自启..."
     systemctl enable wg-quick@wg0
 
+    # 6. 显示结果 (通用)
     echo -e "\n=============================================================="
     echo "🎉 WireGuard 安装完成! 🎉"
     echo "=============================================================="
@@ -144,11 +171,12 @@ EOF
     echo "--------------------------------------------------------------"
 }
 
-# 开始菜单
+# --- 开始菜单 ---
+
 start_menu(){
     clear
     echo "=================================================="
-    echo " 介绍：适用于 Ubuntu 的 WireGuard 一键安装脚本"
+    echo " 介绍：适用于 Debian/Ubuntu/CentOS 的 WireGuard 安装脚本"
     echo " 作者：Gemini Code Assist"
     echo "=================================================="
     echo "1. 安装 WireGuard"
