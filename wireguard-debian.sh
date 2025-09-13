@@ -95,19 +95,27 @@ wireguard_install() {
 
         # 安装 udp2raw
         echo "正在下载并安装 udp2raw..."
-        # **FIXED**: More robust command to get the download URL
-        UDP2RAW_URL=$(curl -s "https://api.github.com/repos/wangyu-/udp2raw-tunnel/releases/latest" | grep -o 'https://github.com/wangyu-/udp2raw-tunnel/releases/download/[^" ]*udp2raw_binaries-linux-amd64.tar.gz' | head -n 1)
-
+        # 修正: udp2raw 作者修改了 release asset 的命名, 因此更新 grep pattern
+        UDP2RAW_URL=$(curl -s "https://api.github.com/repos/wangyu-/udp2raw-tunnel/releases/latest" | grep "browser_download_url.*udp2raw_binaries.tar.gz" | cut -d '"' -f 4)
+        
+        # 增加备用链接，防止 API 失效或被限速
         if [ -z "$UDP2RAW_URL" ]; then
-            echo "错误: 无法自动获取 udp2raw 的下载链接。请检查网络或稍后再试。"
-            exit 1
+            echo "警告: 无法通过 GitHub API 自动获取 udp2raw 下载链接。"
+            echo "正在尝试使用固定的备用链接..."
+            UDP2RAW_URL="https://github.com/wangyu-/udp2raw-tunnel/releases/download/20240225.0/udp2raw_binaries.tar.gz"
         fi
 
-        echo "下载链接: $UDP2RAW_URL"
+        echo "使用下载链接: $UDP2RAW_URL"
         curl -L -o udp2raw.tar.gz "$UDP2RAW_URL"
-        tar -xzf udp2raw.tar.gz
+
+        if ! tar -xzf udp2raw.tar.gz; then
+            echo "错误: 下载或解压 udp2raw.tar.gz 失败。请检查网络或链接。"
+            rm -f udp2raw.tar.gz
+            exit 1
+        fi
+        
         mv udp2raw_amd64 /usr/local/bin/udp2raw
-        rm -f udp2raw.tar.gz udp2raw_amd64_*
+        rm -f udp2raw.tar.gz udp2raw_*
 
         # 创建 systemd 服务
         echo "正在创建 udp2raw 系统服务..."
@@ -256,9 +264,6 @@ add_new_client() {
     new_client_public_key=$(echo "$new_client_private_key" | wg pubkey)
 
     echo "正在更新服务器配置..."
-    # 使用更安全的方式动态添加 Peer，而不是直接重启服务
-    wg set wg0 peer "$new_client_public_key" allowed-ips "$new_client_ip"
-    # 同时也将配置持久化到文件
     cat >> /etc/wireguard/wg0.conf <<-EOF
 
 		[Peer]
@@ -296,6 +301,10 @@ add_new_client() {
 		PersistentKeepalive = 25
 	EOF
 	chmod 600 "/etc/wireguard/${client_name}.conf"
+
+    echo "正在同步 WireGuard 配置以应用更改..."
+    # 'syncconf' is better than a full restart as it doesn't drop existing connections.
+    wg syncconf wg0 <(cat /etc/wireguard/wg0.conf)
 
     echo -e "\n=============================================================="
     echo "🎉 新客户端 '$client_name' 添加成功! 🎉"
