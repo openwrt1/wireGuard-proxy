@@ -1,10 +1,5 @@
 #!/bin/bash
 
-# ==================================================
-# 介绍：适用于 Debian 10+/11+/12+ 的 WireGuard 一键安装脚本
-# 作者：Gemini Code Assist（Debian 专用版）
-# ==================================================
-
 # 判断是否为 root 用户
 if [ "$(id -u)" != "0" ]; then
 	echo "错误: 你必须以 root 用户身份运行此脚本" 1>&2
@@ -21,7 +16,7 @@ fi
 rand_port() {
 	min=10000
 	max=60000
-	echo $(($RANDOM % ($max - $min) + $min))
+	echo $((RANDOM % (max - min) + min))
 }
 
 # 配置客户端文件
@@ -47,11 +42,18 @@ wireguard_install() {
 	apt-get update
 
 	echo "正在安装 WireGuard 及相关工具..."
-	apt-get install -y wireguard qrencode ufw curl linux-headers-$(uname -r)
+	# 使用更通用的方式安装内核头文件，提高兼容性
+	# linux-headers-amd64 会自动匹配并安装适用于当前架构的最新头文件
+	# 这比写死 $(uname -r) 更健壮
+	apt-get install -y wireguard qrencode ufw curl linux-headers-amd64
 
 	echo "正在创建 WireGuard 目录和密钥..."
-	mkdir -p /etc/wireguard
-	cd /etc/wireguard
+	# 尝试创建目录，并检查是否成功
+	if ! mkdir -p /etc/wireguard; then
+		echo "错误: 无法创建目录 /etc/wireguard。请检查权限或磁盘空间。" >&2
+		exit 1
+	fi
+	cd /etc/wireguard || { echo "错误: 无法切换到目录 /etc/wireguard。请检查目录是否存在且为有效目录。" >&2; exit 1; }
 
 	wg genkey | tee sprivatekey | wg pubkey >spublickey
 	wg genkey | tee cprivatekey | wg pubkey >cpublickey
@@ -82,7 +84,7 @@ wireguard_install() {
 
 	echo "配置防火墙 (UFW)..."
 	ufw allow ssh
-	ufw allow $port/udp
+	ufw allow "$port"/udp
 	ufw --force enable
 
 	net_interface=$(ip -o -4 route show to default | awk '{print $5}')
@@ -129,6 +131,29 @@ wireguard_install() {
 	echo "=============================================================="
 }
 
+# 卸载 WireGuard
+wireguard_uninstall() {
+	echo "正在停止并禁用 WireGuard 服务..."
+	systemctl stop wg-quick@wg0
+	systemctl disable wg-quick@wg0
+
+	echo "正在卸载 WireGuard 及相关软件包..."
+	# 使用 --purge 彻底清除配置
+	apt-get remove --purge -y wireguard wireguard-tools qrencode
+
+	echo "正在清理配置文件..."
+	rm -rf /etc/wireguard
+
+	echo "正在重置防火墙规则 (UFW)..."
+	# ufw reset 会禁用防火墙，需要用户确认
+	ufw --force reset
+	echo "防火墙已重置并禁用。"
+
+	echo -e "\n=============================================================="
+	echo "🎉 WireGuard 已成功卸载。"
+	echo "=============================================================="
+}
+
 # 菜单
 start_menu() {
 	clear
@@ -136,12 +161,14 @@ start_menu() {
 	echo " 适用于 Debian 的 WireGuard 一键安装脚本"
 	echo "=================================================="
 	echo "1. 安装 WireGuard"
-	echo "2. 退出脚本"
+	echo "2. 卸载 WireGuard"
+	echo "3. 退出脚本"
 	echo
-	read -p "请输入数字 [1-2]: " num
+	read -r -p "请输入数字 [1-3]: " num
 	case "$num" in
 	1) wireguard_install ;;
-	2) exit 0 ;;
+	2) wireguard_uninstall ;;
+	3) exit 0 ;;
 	*)
 		echo "错误: 请输入正确的数字"
 		sleep 2
