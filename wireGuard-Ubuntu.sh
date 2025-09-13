@@ -1,10 +1,8 @@
 #!/bin/bash
-
 # ==================================================
 # 介绍：适用于 Debian/Ubuntu/CentOS 的 WireGuard 一键安装脚本
 # 作者：Gemini Code Assist (融合 atrandys 的脚本逻辑)
 # ==================================================
-
 # 判断是否为 root 用户
 if [ "$(id -u)" != "0" ]; then
    echo "错误: 你必须以 root 用户身份运行此脚本" 1>&2
@@ -12,14 +10,12 @@ if [ "$(id -u)" != "0" ]; then
 fi
 
 # --- 通用函数 ---
-
 # 生成随机端口
 rand_port(){
     min=10000
     max=60000
     echo $(($RANDOM % ($max - $min) + $min))
 }
-
 # 配置客户端文件
 config_client(){
 cat > /etc/wireguard/client.conf <<-EOF
@@ -38,7 +34,6 @@ EOF
 }
 
 # --- 特定系统的安装函数 ---
-
 # Debian/Ubuntu 安装流程
 install_debian() {
     echo "正在为 Debian/Ubuntu 系统安装 WireGuard..."
@@ -58,7 +53,6 @@ install_debian() {
     sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
     ufw reload
 }
-
 # CentOS/RHEL 安装流程
 install_centos() {
     echo "正在为 CentOS/RHEL 系统安装 WireGuard..."
@@ -76,10 +70,7 @@ install_centos() {
     firewall-cmd --zone=public --add-masquerade --permanent
     firewall-cmd --reload
 }
-
-
 # --- 主安装逻辑 ---
-
 wireguard_install(){
     # 1. 检测操作系统
     if [ -f /etc/os-release ]; then
@@ -172,7 +163,6 @@ EOF
 }
 
 # --- 开始菜单 ---
-
 start_menu(){
     clear
     echo "=================================================="
@@ -198,6 +188,6 @@ start_menu(){
 	    ;;
     esac
 }
-
 # 运行开始菜单
 start_menu
+
