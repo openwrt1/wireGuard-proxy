@@ -88,7 +88,7 @@ wireguard_install() {
 
 		echo "正在下载并安装 udp2raw..."
 		# 作者已停止更新，直接使用固定链接以提高稳定性和速度
-		UDP2RAW_URL="https://github.com/wangyu-/udp2raw-tunnel/releases/download/20240225.0/udp2raw_binaries.tar.gz"
+		UDP2RAW_URL="https://github.com/wangyu-/udp2raw/releases/download/20230206.0/udp2raw_binaries.tar.gz"
 
 		echo "使用下载链接: $UDP2RAW_URL"
 		if ! curl -L -o udp2raw_binaries.tar.gz "$UDP2RAW_URL"; then
