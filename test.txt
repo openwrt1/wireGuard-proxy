@@ -1,0 +1,5 @@
+
+#!/bin/bash
+
+nohup /root/udp2raw/udp2raw_amd64 -c -l0.0.0.0:5632 -r141.11.175.39:30005 -k "pass" --raw-mode faketcp --cipher-mode xor  -a > /root/udp2raw/udp_16400.log 2>&1 &
+./udp2raw -c -l 127.0.0.1:29999 -r 64.69.34.176:39001 -k "eOdb6lWMm2J3kWk8" --raw-mode faketcp -a
