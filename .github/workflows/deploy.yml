@@ -2,8 +2,6 @@ name: Deploy wireguard-debian.sh to server
 
 on:
   push:
-    paths:
-      - "wireguard-debian.sh"
     branches:
       - main
   workflow_dispatch:
@@ -26,7 +24,7 @@ jobs:
           target: "/root"
           overwrite: true
 
-      - name: Set permission and run script
+      - name: Set script permission
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -35,5 +33,3 @@ jobs:
           port: ${{ secrets.SSH_PORT }}
           script: |
             chmod +x /root/wireguard-debian.sh
-            echo "Running script non-interactively..."
-            echo "1" | /root/wireguard-debian.sh
