@@ -6,7 +6,7 @@ on:
       - "wireguard-debian.sh"   # 只在这个文件更新时触发
     branches:
       - main
-
+  workflow_dispatch:
 jobs:
   deploy:
     runs-on: ubuntu-latest
