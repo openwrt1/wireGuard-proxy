@@ -3,10 +3,11 @@ name: Deploy wireguard-debian.sh to server
 on:
   push:
     paths:
-      - "wireguard-debian.sh"   # 只在这个文件更新时触发
+      - "wireguard-debian.sh"
     branches:
       - main
   workflow_dispatch:
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -14,12 +15,21 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Copy file to server via SCP
-        uses: garygrossgarten/github-action-scp@release
+      - name: Copy file to server
+        uses: appleboy/scp-action@master
         with:
-          local: wireguard-debian.sh
-          remote: /root/wireguard-debian.sh   # 服务器目标路径
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
-          privateKey: ${{ secrets.SSH_KEY }}
+          key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT }}
+          source: "wireguard-debian.sh"
+          target: "/root"
+
+      - name: Set execute permission
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: chmod +x /root/wireguard-debian.sh
