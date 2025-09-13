@@ -95,7 +95,7 @@ wireguard_install() {
 			echo "错误: 使用 curl 下载 udp2raw 失败。请检查网络或链接是否有效。"
 			exit 1
 		fi
-		if [ ! -s udp2raw_binaries.tar.gz ] || [ $(stat -c%s "udp2raw_binaries.tar.gz") -lt 10000 ]; then
+		if [ ! -s udp2raw_binaries.tar.gz ] || [ "$(stat -c%s "udp2raw_binaries.tar.gz")" -lt 10000 ]; then
 			echo "错误: 下载的文件大小异常，可能不是有效的压缩包。"
 			rm -f udp2raw_binaries.tar.gz
 			exit 1
