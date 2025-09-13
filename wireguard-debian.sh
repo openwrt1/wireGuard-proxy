@@ -95,7 +95,15 @@ wireguard_install() {
 
         # 安装 udp2raw
         echo "正在下载并安装 udp2raw..."
-        UDP2RAW_URL=$(curl -s "https://api.github.com/repos/wangyu-/udp2raw-tunnel/releases/latest" | grep "browser_download_url.*linux_amd64" | cut -d '"' -f 4)
+        # **FIXED**: More robust command to get the download URL
+        UDP2RAW_URL=$(curl -s "https://api.github.com/repos/wangyu-/udp2raw-tunnel/releases/latest" | grep -o 'https://github.com/wangyu-/udp2raw-tunnel/releases/download/[^" ]*udp2raw_binaries-linux-amd64.tar.gz' | head -n 1)
+
+        if [ -z "$UDP2RAW_URL" ]; then
+            echo "错误: 无法自动获取 udp2raw 的下载链接。请检查网络或稍后再试。"
+            exit 1
+        fi
+
+        echo "下载链接: $UDP2RAW_URL"
         curl -L -o udp2raw.tar.gz "$UDP2RAW_URL"
         tar -xzf udp2raw.tar.gz
         mv udp2raw_amd64 /usr/local/bin/udp2raw
@@ -193,7 +201,7 @@ wireguard_install() {
         echo ""
         echo "在您的客户端(电脑/路由器)上，先运行以下命令："
         echo "--------------------------------------------------------------"
-        echo "./udp2raw -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k "$udp2raw_password" --raw-mode faketcp -a"
+        echo "./udp2raw -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \"$udp2raw_password\" --raw-mode faketcp -a"
         echo "--------------------------------------------------------------"
         echo "然后再启动上面的 WireGuard 客户端配置。"
         echo "=============================================================="
@@ -248,6 +256,9 @@ add_new_client() {
     new_client_public_key=$(echo "$new_client_private_key" | wg pubkey)
 
     echo "正在更新服务器配置..."
+    # 使用更安全的方式动态添加 Peer，而不是直接重启服务
+    wg set wg0 peer "$new_client_public_key" allowed-ips "$new_client_ip"
+    # 同时也将配置持久化到文件
     cat >> /etc/wireguard/wg0.conf <<-EOF
 
 		[Peer]
@@ -285,9 +296,6 @@ add_new_client() {
 		PersistentKeepalive = 25
 	EOF
 	chmod 600 "/etc/wireguard/${client_name}.conf"
-
-    echo "正在重新加载 WireGuard 服务..."
-    wg-quick strip wg0 > current.conf && wg-quick set wg0 peer "$new_client_public_key" allowed-ips "$new_client_ip"
 
     echo -e "\n=============================================================="
     echo "🎉 新客户端 '$client_name' 添加成功! 🎉"
