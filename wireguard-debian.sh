@@ -61,7 +61,12 @@ wireguard_install(){
     c1=$(cat cprivatekey)
     c2=$(cat cpublickey)
 
-    server_ip=$(curl -s icanhazip.com)
+# 优先取 IPv4，没有就取 IPv6
+server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
+# 如果是 IPv6，加方括号
+if [[ $server_ip == *:* ]]; then
+    server_ip="[$server_ip]"
+fi
     port=$(rand_port)
 
     echo "配置系统网络转发..."
