@@ -7,6 +7,7 @@
 # - 使用 apk 作为包管理器
 # - 使用 iptables 并与 wg0 接口绑定，无需持久化配置
 # - 完整移植原 Debian 脚本的所有功能
+# - 智能处理 qrencode 可选安装
 #================================================================================
 
 # --- 全局函数和变量 ---
@@ -53,8 +54,15 @@ wireguard_install() {
 	echo "正在更新软件包列表..."
 	apk update
 
-	echo "正在安装 WireGuard 及相关工具..."
-	apk add wireguard-tools qrencode curl iptables
+	echo "正在安装 WireGuard 及核心工具..."
+	apk add wireguard-tools curl iptables
+    if [ $? -ne 0 ]; then
+        echo "错误: 安装核心软件包失败，请检查网络和软件源配置。"
+        exit 1
+    fi
+
+    echo "正在尝试安装 qrencode (用于生成二维码)..."
+    apk add qrencode &>/dev/null
 
 	echo "正在创建 WireGuard 目录和密钥..."
 	mkdir -p /etc/wireguard && chmod 700 /etc/wireguard
@@ -227,7 +235,11 @@ wireguard_install() {
 	echo "服务器配置: /etc/wireguard/wg0.conf"
 	echo "客户端配置: /etc/wireguard/client.conf"
 	echo ""
-	qrencode -t ansiutf8 < /etc/wireguard/client.conf
+    if command -v qrencode &> /dev/null; then
+        qrencode -t ansiutf8 < /etc/wireguard/client.conf
+    else
+        echo "[提示] 未安装 qrencode，无法生成二维码。请手动使用 client.conf 文件。"
+    fi
 	echo "=============================================================="
 
     if [ "$use_udp2raw" == "y" ]; then
@@ -267,7 +279,7 @@ wireguard_uninstall() {
     systemctl disable udp2raw &>/dev/null || true
 
 	echo "正在卸载 WireGuard 及相关软件包..."
-	apk del wireguard-tools qrencode iptables
+	apk del wireguard-tools curl iptables qrencode &>/dev/null || apk del wireguard-tools curl iptables
 
 	echo "正在清理配置文件和程序..."
 	rm -rf /etc/wireguard
@@ -348,7 +360,11 @@ add_new_client() {
     echo "🎉 新客户端 '$client_name' 添加成功! 🎉"
     echo "=============================================================="
     echo "客户端配置文件: /etc/wireguard/${client_name}.conf"
-    qrencode -t ansiutf8 < "/etc/wireguard/${client_name}.conf"
+    if command -v qrencode &> /dev/null; then
+        qrencode -t ansiutf8 < "/etc/wireguard/${client_name}.conf"
+    else
+        echo "[提示] 未安装 qrencode，无法生成二维码。请手动使用 ${client_name}.conf 文件。"
+    fi
     echo "=============================================================="
     
     if systemctl -q is-active udp2raw; then
