@@ -14,9 +14,9 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
-      - name: Copy file to server
-        uses: appleboy/scp-action@master
+      
+      - name: Upload script to server
+        uses: appleboy/scp-action@v0.1.4
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -24,12 +24,16 @@ jobs:
           port: ${{ secrets.SSH_PORT }}
           source: "wireguard-debian.sh"
           target: "/root"
+          overwrite: true
 
-      - name: Set execute permission
-        uses: appleboy/ssh-action@master
+      - name: Set permission and run script
+        uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT }}
-          script: chmod +x /root/wireguard-debian.sh
+          script: |
+            chmod +x /root/wireguard-debian.sh
+            echo "Running script non-interactively..."
+            echo "1" | /root/wireguard-debian.sh
