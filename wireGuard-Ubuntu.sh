@@ -7,7 +7,8 @@
 # 1. 安装 WireGuard (可选集成 Udp2raw)
 # 2. 卸载 WireGuard
 # 3. 添加新用户
-# 4. 智能安装检测，防止重复执行
+# 4. 删除用户
+# 5. 智能安装检测，防止重复执行
 #================================================================================
 
 # --- 全局函数和变量 ---
@@ -34,6 +35,38 @@ rand_port() {
 	max=60000
 	echo $((RANDOM % (max - min) + min))
 }
+
+# 显示 Udp2raw 客户端配置信息
+display_udp2raw_info() {
+    local server_ip=$1
+    local tcp_port=$2
+    local udp2raw_password=$3
+
+    echo -e "\\n=================== 客户端 Udp2raw 设置 ==================="
+    echo "伪装模式已启用，您需要在客户端上运行 udp2raw。"
+    echo "请从 https://github.com/wangyu-/udp2raw/releases 下载 udp2raw 二进制文件。"
+    echo "解压后，根据您的操作系统，在终端或命令行中运行对应命令："
+    echo ""
+    echo "服务器 TCP 端口: $tcp_port"
+    echo "连接密码: $udp2raw_password"
+    echo ""
+    echo -e "\\033[1;32m--- Linux 客户端 ---\\033[0m"
+    echo "(根据您的架构选择 udp2raw_amd64, udp2raw_arm 等)"
+    echo "./udp2raw_amd64 -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \\"$udp2raw_password\\" --raw-mode faketcp --cipher-mode xor -a"
+    echo ""
+    echo -e "\\033[1;32m--- macOS 客户端 ---\\033[0m"
+    echo "(M1/M2/M3 芯片请用 udp2raw_mp_mac_m1)"
+    echo "./udp2raw_mp_mac -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \\"$udp2raw_password\\" --raw-mode faketcp --cipher-mode xor"
+    echo ""
+    echo -e "\\033[1;32m--- Windows 客户端 (在 CMD 或 PowerShell 中运行) ---\\033[0m"
+    echo "(推荐使用 udp2raw_mp.exe)"
+    echo "udp2raw_mp.exe -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \\"$udp2raw_password\\" --raw-mode faketcp --cipher-mode xor -a"
+    echo ""
+    echo "--------------------------------------------------------------"
+    echo "然后再启动 WireGuard 客户端。"
+    echo "=============================================================="
+}
+
 
 # --- 主要功能函数 ---
 
@@ -91,7 +124,7 @@ wireguard_install(){
         read -r -p "请输入 udp2raw 的 TCP 端口 [默认: 39001]: " tcp_port
         tcp_port=${tcp_port:-39001}
         wg_port=$(rand_port) # 内部 WG 端口保持随机
-        client_mtu=1200 # udp2raw 需要更小的 MTU
+        client_mtu=1280 # udp2raw 需要更小的 MTU
         udp2raw_password=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
 
         echo "开放 udp2raw 的 TCP 端口: $tcp_port"
@@ -184,7 +217,7 @@ wireguard_install(){
 	net_interface=$(ip -o -4 route show to default | awk '{print $5}')
 	echo "检测到主网络接口为: $net_interface"
 	if ! grep -q "POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE" /etc/ufw/before.rules; then
-		sed -i "1s;^;*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE\nCOMMIT\n;" /etc/ufw/before.rules
+		sed -i "1s;^;*nat\\n:POSTROUTING ACCEPT [0:0]\\n-A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE\\nCOMMIT\\n;" /etc/ufw/before.rules
 	fi
 	sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 	ufw reload
@@ -224,7 +257,7 @@ wireguard_install(){
 	wg-quick up wg0 || { echo "错误: 启动 WireGuard 接口 wg0 失败。" >&2; exit 1; }
 	systemctl enable wg-quick@wg0
 
-	echo -e "\n=============================================================="
+	echo -e "\\n=============================================================="
 	echo "🎉 WireGuard 安装完成! 🎉"
 	echo "=============================================================="
 	echo "服务器配置: /etc/wireguard/wg0.conf"
@@ -234,29 +267,7 @@ wireguard_install(){
 	echo "=============================================================="
 
     if [ "$use_udp2raw" == "y" ]; then
-        echo -e "\n=================== 客户端 Udp2raw 设置 ==================="
-        echo "伪装模式已启用，您需要在客户端上运行 udp2raw。"
-        echo "请从 https://github.com/wangyu-/udp2raw/releases 下载 udp2raw 二进制文件。"
-        echo "解压后，根据您的操作系统，在终端或命令行中运行对应命令："
-        echo ""
-        echo "服务器 TCP 端口: $tcp_port"
-        echo "连接密码: $udp2raw_password"
-        echo ""
-        echo -e "\033[1;32m--- Linux 客户端 ---\033[0m"
-        echo "(根据您的架构选择 udp2raw_amd64, udp2raw_arm 等)"
-        echo "./udp2raw_amd64 -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
-        echo ""
-        echo -e "\033[1;32m--- macOS 客户端 ---\033[0m"
-        echo "(M1/M2/M3 芯片请用 udp2raw_mp_mac_m1)"
-        echo "./udp2raw_mp_mac -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor"
-        echo ""
-        echo -e "\033[1;32m--- Windows 客户端 (在 CMD 或 PowerShell 中运行) ---\033[0m"
-        echo "(推荐使用 udp2raw_mp.exe)"
-        echo "./udp2raw_mp.exe -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
-        echo ""
-        echo "--------------------------------------------------------------"
-        echo "然后再启动 WireGuard 客户端。"
-        echo "=============================================================="
+        display_udp2raw_info "$server_ip" "$tcp_port" "$udp2raw_password"
     fi
 }
 
@@ -280,7 +291,7 @@ wireguard_uninstall() {
 	echo "跳过防火墙重置，以避免影响其他服务。"
 	echo "请手动删除为 WireGuard 或 udp2raw 开放的端口。"
 
-	echo -e "\n=============================================================="
+	echo -e "\\n=============================================================="
 	echo "🎉 WireGuard 及 Udp2raw 已成功卸载。"
 	echo "=============================================================="
 }
@@ -297,7 +308,7 @@ add_new_client() {
     client_name=$(echo "$client_name" | tr -dc '[:alnum:]_-')
     if [ -f "/etc/wireguard/${client_name}.conf" ]; then echo "错误: 名为 ${client_name} 的客户端配置已存在。"; exit 1; fi
 
-    last_ip_octet=$(grep -oP 'AllowedIPs = 10.0.0.\K[0-9]+' /etc/wireguard/wg0.conf | sort -n | tail -1)
+    last_ip_octet=$(grep -oP 'AllowedIPs = 10.0.0.\\K[0-9]+' /etc/wireguard/wg0.conf | sort -n | tail -1)
     next_ip_octet=$((last_ip_octet + 1))
     if [ "$next_ip_octet" -gt 254 ]; then echo "错误: IP 地址池已满。"; exit 1; fi
     new_client_ip="10.0.0.${next_ip_octet}/32"
@@ -326,10 +337,10 @@ add_new_client() {
     local client_mtu
     if systemctl -q is-active udp2raw; then
         client_endpoint="127.0.0.1:29999"
-        client_mtu=1200
+        client_mtu=1280
     else
         server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
-        server_port=$(grep -oP 'ListenPort = \K[0-9]+' /etc/wireguard/wg0.conf)
+        server_port=$(grep -oP 'ListenPort = \\K[0-9]+' /etc/wireguard/wg0.conf)
         client_endpoint="$server_ip:$server_port"
         client_mtu=1420
     fi
@@ -349,7 +360,7 @@ add_new_client() {
 	EOF
 	chmod 600 "/etc/wireguard/${client_name}.conf"
 
-    echo -e "\n=============================================================="
+    echo -e "\\n=============================================================="
     echo "🎉 新客户端 '$client_name' 添加成功! 🎉"
     echo "=============================================================="
     echo "客户端配置文件: /etc/wireguard/${client_name}.conf"
@@ -357,9 +368,104 @@ add_new_client() {
     echo "=============================================================="
 
     if systemctl -q is-active udp2raw; then
-        echo "提醒: 您的服务正在使用 udp2raw，请确保客户端也正确配置。"
+        # 提醒用户 udp2raw 正在运行，并显示连接信息
+        echo "提醒: 您的服务正在使用 udp2raw，新客户端也需要配置。"
+        
+        # 从 systemd 服务文件中提取信息
+        local server_ip
+        local tcp_port
+        local udp2raw_password
+        
+        server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
+        
+        if [ -f /etc/systemd/system/udp2raw.service ]; then
+            tcp_port=$(grep -oP 'ExecStart=.*-l 0\\.0\\.0\\.0:\\K[0-9]+' /etc/systemd/system/udp2raw.service)
+            udp2raw_password=$(grep -oP 'ExecStart=.*-k \"\\K[^\"]+\'' /etc/systemd/system/udp2raw.service)
+        fi
+
+        if [ -n "$server_ip" ] && [ -n "$tcp_port" ] && [ -n "$udp2raw_password" ]; then
+            display_udp2raw_info "$server_ip" "$tcp_port" "$udp2raw_password"
+        else
+            echo "警告: 无法从 /etc/systemd/system/udp2raw.service 中自动提取 udp2raw 配置信息。"
+            echo "请手动检查您的 udp2raw 客户端配置。"
+        fi
     fi
 }
+
+# 删除客户端
+delete_client() {
+    if [ ! -f /etc/wireguard/wg0.conf ]; then
+        echo "错误: WireGuard 尚未安装。请先选择选项 1 进行安装。"
+        exit 1
+    fi
+
+    echo "可用的客户端配置:"
+    CLIENTS=$(find /etc/wireguard/ -name "*.conf" -printf "%f\n" | sed 's/\.conf$//' | grep -v '^wg0$')
+    
+    if [ -z "$CLIENTS" ]; then
+        echo "没有找到任何客户端。"
+        exit 0
+    fi
+    echo "$CLIENTS"
+    echo
+
+    read -r -p "请输入要删除的客户端的名称: " client_name
+
+    if [ -z "$client_name" ]; then
+        echo "错误: 客户端名称不能为空。"
+        exit 1
+    fi
+
+    if [ ! -f "/etc/wireguard/${client_name}.conf" ]; then
+        echo "错误: 名为 ${client_name} 的客户端配置不存在。"
+        exit 1
+    fi
+
+    # 从 wg0.conf 中根据注释 '# Client: client_name' 找到对应的公钥
+    client_pub_key=$(grep -A 2 -E "^\s*# Client: ${client_name}\s*$" /etc/wireguard/wg0.conf | awk '/PublicKey/ {print $3}')
+
+    if [ -z "$client_pub_key" ]; then
+        echo "错误: 无法在 wg0.conf 中找到客户端 ${client_name} 的公钥。"
+        echo "可能是配置文件格式问题或该用户已被手动删除。"
+        exit 1
+    fi
+
+    echo "正在删除客户端: $client_name (公钥: $client_pub_key)"
+
+    # 1. 从实时接口中移除 peer
+    wg set wg0 peer "$client_pub_key" remove
+    if [ $? -ne 0 ]; then
+        echo "警告: 从实时接口移除 peer 失败。可能该 peer 已不存在于活动会话中。"
+    fi
+
+    # 2. 从 wg0.conf 中移除 peer 配置块
+    cp /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.bak
+    # 使用 awk 以段落模式（由空行分隔）来安全地删除整个 peer 块
+    awk -v key_to_remove="$client_pub_key" '
+        BEGIN { RS = ""; FS = "\n" }
+        {
+            is_target = 0
+            for (i=1; i<=NF; i++) {
+                if ($i ~ "PublicKey = " key_to_remove) {
+                    is_target = 1
+                    break
+                }
+            }
+            if (!is_target) {
+                # 打印非目标的块，并保留其后的记录分隔符（空行）
+                print $0 (RT ? RT : "")
+            }
+        }
+    ' /etc/wireguard/wg0.conf.bak > /etc/wireguard/wg0.conf
+
+    # 3. 删除客户端的配置文件
+    rm -f "/etc/wireguard/${client_name}.conf"
+
+    echo -e "\\n=============================================================="
+    echo "🎉 客户端 '$client_name' 已成功删除。"
+    echo "=============================================================="
+}
+
 
 # --- 菜单和主逻辑 ---
 start_menu(){
@@ -371,14 +477,16 @@ start_menu(){
 	echo "1. 安装 WireGuard"
 	echo "2. 卸载 WireGuard"
 	echo "3. 添加新用户"
-	echo "4. 退出脚本"
+	echo "4. 删除用户"
+	echo "5. 退出脚本"
 	echo
-	read -r -p "请输入数字 [1-4]: " num
+	read -r -p "请输入数字 [1-5]: " num
 	case "$num" in
 	1) wireguard_install ;;
 	2) wireguard_uninstall ;;
 	3) add_new_client ;;
-	4) exit 0 ;;
+	4) delete_client ;;
+	5) exit 0 ;;
 	*)
 		echo "错误: 请输入正确的数字"
 		sleep 2
