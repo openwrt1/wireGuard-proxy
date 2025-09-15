@@ -148,6 +148,11 @@ wireguard_install() {
 	if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
 		echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 	fi
+	# 开启 IPv6 转发
+	sed -i '/net.ipv6.conf.all.forwarding=1/s/^#//' /etc/sysctl.conf
+	if ! grep -q "net.ipv6.conf.all.forwarding=1" /etc/sysctl.conf; then
+		echo "net.ipv6.conf.all.forwarding=1" >> /etc/sysctl.conf
+	fi
 	# 创建一个文件来保存关键参数，方便后续添加用户
 	PARAMS_FILE="/etc/wireguard/params"
     {
@@ -377,6 +382,10 @@ wireguard_install() {
 	# 在所有网络和防火墙规则配置完成后，再应用 sysctl 设置
 	sysctl -p
 
+	# 为 IPv6 添加 MASQUERADE 规则
+	echo "【信息】为 IPv6 添加防火墙转发规则..."
+	ip6tables -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o "$net_interface" -j MASQUERADE
+
 	echo "正在创建服务器配置文件 wg0.conf..."
 	(
 		printf "[Interface]\n"
@@ -384,10 +393,11 @@ wireguard_install() {
 		printf "Address = 10.0.0.1/24\n"
 		printf "ListenPort = %s\n" "$wg_port"
 		printf "MTU = 1420\n\n"
+		printf "Address = fd86:ea04:1111::1/64\n"
 		printf "[Peer]\n"
 		printf "# Client: client\n"
 		printf "PublicKey = %s\n" "$c2"
-		printf "AllowedIPs = 10.0.0.2/32\n"
+		printf "AllowedIPs = 10.0.0.2/32, fd86:ea04:1111::2/128\n"
 	) > /etc/wireguard/wg0.conf
 
 	echo "正在创建客户端配置文件 client.conf..."
@@ -395,7 +405,8 @@ wireguard_install() {
 		printf "[Interface]\n"
 		printf "PrivateKey = %s\n" "$c1"
 		printf "Address = 10.0.0.2/24\n"
-		printf "DNS = 8.8.8.8\n"
+		printf "Address = fd86:ea04:1111::2/64\n"
+		printf "DNS = 8.8.8.8, 2001:4860:4860::8888\n"
 		printf "MTU = %s\n\n" "$client_mtu"
 		printf "[Peer]\n"
 		printf "PublicKey = %s\n" "$s2"
@@ -464,6 +475,7 @@ add_new_client() {
     last_ip_octet=$(grep -oP 'AllowedIPs = 10.0.0.\\K[0-9]+' /etc/wireguard/wg0.conf | sort -n | tail -1)
     next_ip_octet=$((last_ip_octet + 1))
     if [ "$next_ip_octet" -gt 254 ]; then echo "错误: IP 地址池已满。"; exit 1; fi
+    new_client_ipv6="fd86:ea04:1111::${next_ip_octet}/128"
     new_client_ip="10.0.0.${next_ip_octet}/32"
     echo "为新客户端分配的 IP 地址: 10.0.0.${next_ip_octet}"
 
@@ -473,14 +485,14 @@ add_new_client() {
 
     echo "正在更新服务器配置..."
     # 使用更安全的方式热添加 peer，而不是重启整个服务
-    wg set wg0 peer "$new_client_public_key" allowed-ips "$new_client_ip"
+    wg set wg0 peer "$new_client_public_key" allowed-ips "$new_client_ip, $new_client_ipv6"
     # 同时也将配置持久化到文件
     cat >> /etc/wireguard/wg0.conf <<-EOF
 
 		[Peer]
 		# Client: $client_name
 		PublicKey = $new_client_public_key
-		AllowedIPs = $new_client_ip
+		AllowedIPs = $new_client_ip, $new_client_ipv6
 	EOF
 
     echo "正在创建客户端配置文件 /etc/wireguard/${client_name}.conf..."
@@ -519,8 +531,8 @@ add_new_client() {
     cat > "/etc/wireguard/${client_name}.conf" <<-EOF
 		[Interface]
 		PrivateKey = $new_client_private_key
-		Address = 10.0.0.${next_ip_octet}/24
-		DNS = 8.8.8.8
+		Address = 10.0.0.${next_ip_octet}/24, fd86:ea04:1111::${next_ip_octet}/64
+		DNS = 8.8.8.8, 2001:4860:4860::8888
 		MTU = $client_mtu
 
 		[Peer]
