@@ -268,23 +268,36 @@ wireguard_install() {
         fi
     fi
 
-	ufw --force enable
-
 	# 智能获取主网络接口，兼容 IPv4/IPv6-only 环境
 	net_interface=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}')
 	if [ -z "$net_interface" ]; then
 		# 如果 IPv4 失败，则尝试 IPv6
 		net_interface=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}')
 	fi
-
 	echo "检测到主网络接口为: $net_interface"
+
+    # --- 调试信息开始 ---
+    echo "【调试】准备修改防火墙规则，当前文件内容（前5行）："
+    head -n 5 /etc/ufw/before.rules
+    # --- 调试信息结束 ---
+
 	if ! grep -q "POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE" /etc/ufw/before.rules; then
 		# 使用占位符分两步写入，避免变量解析问题
 		sed -i "1s;^;*nat\\n:POSTROUTING ACCEPT [0:0]\\n-A POSTROUTING -s 10.0.0.0/24 -o __NET_INTERFACE__ -j MASQUERADE\\nCOMMIT\\n;" /etc/ufw/before.rules
 		sed -i "s|__NET_INTERFACE__|$net_interface|g" /etc/ufw/before.rules
+        echo "【调试】已向 /etc/ufw/before.rules 添加 NAT 规则。"
 	fi
 	sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
-	ufw reload
+    echo "【调试】已将 /etc/default/ufw 的 FORWARD_POLICY 修改为 ACCEPT。"
+
+    # --- 调试信息开始 ---
+    echo "【调试】所有规则修改完毕，最终文件内容（前5行）："
+    head -n 5 /etc/ufw/before.rules
+    # --- 调试信息结束 ---
+
+    # 确保所有规则都已就位后，再启动或重载 UFW
+    ufw --force enable
+    ufw reload
 
 	# 在所有网络和防火墙规则配置完成后，再应用 sysctl 设置
 	sysctl -p
