@@ -271,7 +271,8 @@ wireguard_install() {
 
 	ufw --force enable
 
-	net_interface=$(ip -o -4 route show to default | awk '{print $5}')
+	# 使用更可靠的方式获取主网络接口
+	net_interface=$(ip -4 route get 1.1.1.1 | awk '{print $5}')
 	echo "检测到主网络接口为: $net_interface"
 	if ! grep -q "POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE" /etc/ufw/before.rules; then
 		sed -i "1s;^;*nat\\n:POSTROUTING ACCEPT [0:0]\\n-A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE\\nCOMMIT\\n;" /etc/ufw/before.rules
