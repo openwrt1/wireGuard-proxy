@@ -42,29 +42,29 @@ display_udp2raw_info() {
     local tcp_port=$2
     local udp2raw_password=$3
 
-    echo -e "\\n=================== 客户端 Udp2raw 设置 ==================="
-    echo "伪装模式已启用，您需要在客户端上运行 udp2raw。"
-    echo "请从 https://github.com/wangyu-/udp2raw/releases 下载 udp2raw 二进制文件。"
-    echo "解压后，根据您的操作系统，在终端或命令行中运行对应命令："
-    echo ""
-    echo "服务器 TCP 端口: $tcp_port"
-    echo "连接密码: $udp2raw_password"
-    echo ""
-    echo -e "\\033[1;32m--- Linux 客户端 ---\\033[0m"
-    echo "(根据您的架构选择 udp2raw_amd64, udp2raw_arm 等)"
-    echo "./udp2raw_amd64 -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \\"$udp2raw_password\\" --raw-mode faketcp --cipher-mode xor -a"
-    echo ""
-    echo -e "\\033[1;32m--- macOS 客户端 ---\\033[0m"
-    echo "(M1/M2/M3 芯片请用 udp2raw_mp_mac_m1)"
-    echo "./udp2raw_mp_mac -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \\"$udp2raw_password\\" --raw-mode faketcp --cipher-mode xor"
-    echo ""
-    echo -e "\\033[1;32m--- Windows 客户端 (在 CMD 或 PowerShell 中运行) ---\\033[0m"
-    echo "(推荐使用 udp2raw_mp.exe)"
-    echo "udp2raw_mp.exe -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \\"$udp2raw_password\\" --raw-mode faketcp --cipher-mode xor -a"
-    echo ""
-    echo "--------------------------------------------------------------"
-    echo "然后再启动 WireGuard 客户端。"
-    echo "=============================================================="
+    printf "\\n=================== 客户端 Udp2raw 设置 ===================\\n"
+    printf "伪装模式已启用，您需要在客户端上运行 udp2raw。\\n"
+    printf "请从 https://github.com/wangyu-/udp2raw/releases 下载 udp2raw 二进制文件。\\n"
+    printf "解压后，根据您的操作系统，在终端或命令行中运行对应命令：\\n"
+    printf "\\n"
+    printf "服务器 TCP 端口: %s\\n" "$tcp_port"
+    printf "连接密码: %s\\n" "$udp2raw_password"
+    printf "\\n"
+    printf "\\033[1;32m--- Linux 客户端 ---\\033[0m\\n"
+    printf "(根据您的架构选择 udp2raw_amd64, udp2raw_arm 等)\\n"
+    printf "./udp2raw_amd64 -c -l 127.0.0.1:29999 -r %s:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor -a\\n" "$server_ip" "$tcp_port" "$udp2raw_password"
+    printf "\\n"
+    printf "\\033[1;32m--- macOS 客户端 ---\\033[0m\\n"
+    printf "(M1/M2/M3 芯片请用 udp2raw_mp_mac_m1)\\n"
+    printf "./udp2raw_mp_mac -c -l 127.0.0.1:29999 -r %s:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ip" "$tcp_port" "$udp2raw_password"
+    printf "\\n"
+    printf "\\033[1;32m--- Windows 客户端 (在 CMD 或 PowerShell 中运行) ---\\033[0m\\n"
+    printf "(推荐使用 udp2raw_mp.exe)\\n"
+    printf "udp2raw_mp.exe -c -l 127.0.0.1:29999 -r %s:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor -a\\n" "$server_ip" "$tcp_port" "$udp2raw_password"
+    printf "\\n"
+    printf "--------------------------------------------------------------\\n"
+    printf "然后再启动 WireGuard 客户端。\\n"
+    printf "==============================================================\\n"
 }
 
 
@@ -113,6 +113,10 @@ wireguard_install(){
 	fi
 	sysctl -p
 
+	# 创建一个文件来保存关键参数，方便后续添加用户
+	PARAMS_FILE="/etc/wireguard/params"
+	echo "SERVER_IP=$server_ip" > "$PARAMS_FILE"
+
 	echo "配置防火墙 (UFW)..."
 	ufw allow ssh
 
@@ -126,6 +130,11 @@ wireguard_install(){
         wg_port=$(rand_port) # 内部 WG 端口保持随机
         client_mtu=1280 # udp2raw 需要更小的 MTU
         udp2raw_password=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
+        {
+            echo "USE_UDP2RAW=true"
+            echo "TCP_PORT=$tcp_port"
+            echo "UDP2RAW_PASSWORD=$udp2raw_password"
+        } >> "$PARAMS_FILE"
 
         echo "开放 udp2raw 的 TCP 端口: $tcp_port"
         ufw allow "$tcp_port"/tcp
@@ -205,6 +214,10 @@ wireguard_install(){
     else
         read -r -p "请输入 WireGuard 的 UDP 端口 [默认: 39000]: " wg_port
         wg_port=${wg_port:-39000}
+        {
+            echo "USE_UDP2RAW=false"
+            echo "WG_PORT=$wg_port"
+        } >> "$PARAMS_FILE"
         client_mtu=1420
 
         echo "开放 WireGuard 的 UDP 端口: $wg_port"
@@ -332,16 +345,28 @@ add_new_client() {
 
     echo "正在创建客户端配置文件 /etc/wireguard/${client_name}.conf..."
     server_public_key=$(cat /etc/wireguard/spublickey)
+    PARAMS_FILE="/etc/wireguard/params"
 
     local client_endpoint
     local client_mtu
-    if systemctl -q is-active udp2raw; then
+    local USE_UDP2RAW="false" # 为变量提供默认值以提高健壮性并消除 shellcheck 警告
+    local SERVER_IP=""        # 同上
+    local WG_PORT=""          # 同上
+    local TCP_PORT=""         # 同上
+
+    # 从参数文件中读取配置，而不是实时检测
+    # shellcheck source=/etc/wireguard/params
+    if [ -f "$PARAMS_FILE" ]; then
+        source "$PARAMS_FILE"
+    fi
+
+    if [ "$USE_UDP2RAW" = "true" ]; then
         client_endpoint="127.0.0.1:29999"
         client_mtu=1280
     else
-        server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
-        server_port=$(grep -oP 'ListenPort = \\K[0-9]+' /etc/wireguard/wg0.conf)
-        client_endpoint="$server_ip:$server_port"
+        server_ip="$SERVER_IP"
+        server_port="$WG_PORT"
+        client_endpoint="${server_ip}:${server_port}"
         client_mtu=1420
     fi
 
@@ -361,7 +386,7 @@ add_new_client() {
 	chmod 600 "/etc/wireguard/${client_name}.conf"
 
     echo -e "\\n=============================================================="
-    echo "🎉 新客户端 '$client_name' 添加成功! 🎉"
+    echo "🎉 新客户端 ${client_name} 添加成功! 🎉"
     echo "=============================================================="
     echo "客户端配置文件: /etc/wireguard/${client_name}.conf"
     qrencode -t ansiutf8 < "/etc/wireguard/${client_name}.conf"
@@ -369,24 +394,13 @@ add_new_client() {
 
     if systemctl -q is-active udp2raw; then
         # 提醒用户 udp2raw 正在运行，并显示连接信息
-        echo "提醒: 您的服务正在使用 udp2raw，新客户端也需要配置。"
-        
-        # 从 systemd 服务文件中提取信息
-        local server_ip
-        local tcp_port
-        local udp2raw_password
-        
-        server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
-        
-        if [ -f /etc/systemd/system/udp2raw.service ]; then
-            tcp_port=$(grep -oP 'ExecStart=.*-l 0\\.0\\.0\\.0:\\K[0-9]+' /etc/systemd/system/udp2raw.service)
-            udp2raw_password=$(grep -oP 'ExecStart=.*-k \"\\K[^\"]+\'' /etc/systemd/system/udp2raw.service)
-        fi
+        echo "提醒: 您的服务正在使用 udp2raw，新客户端也需要按以下信息配置。"
 
-        if [ -n "$server_ip" ] && [ -n "$tcp_port" ] && [ -n "$udp2raw_password" ]; then
-            display_udp2raw_info "$server_ip" "$tcp_port" "$udp2raw_password"
+        # 直接从变量显示信息
+        if [ -n "$SERVER_IP" ] && [ -n "$TCP_PORT" ] && [ -n "$UDP2RAW_PASSWORD" ]; then
+            display_udp2raw_info "$SERVER_IP" "$TCP_PORT" "$UDP2RAW_PASSWORD"
         else
-            echo "警告: 无法从 /etc/systemd/system/udp2raw.service 中自动提取 udp2raw 配置信息。"
+            echo "警告: 无法从 /etc/wireguard/params 中自动提取 udp2raw 配置信息。"
             echo "请手动检查您的 udp2raw 客户端配置。"
         fi
     fi
@@ -433,36 +447,25 @@ delete_client() {
     echo "正在删除客户端: $client_name (公钥: $client_pub_key)"
 
     # 1. 从实时接口中移除 peer
-    wg set wg0 peer "$client_pub_key" remove
-    if [ $? -ne 0 ]; then
+    if ! wg set wg0 peer "$client_pub_key" remove; then
         echo "警告: 从实时接口移除 peer 失败。可能该 peer 已不存在于活动会话中。"
     fi
 
     # 2. 从 wg0.conf 中移除 peer 配置块
     cp /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.bak
     # 使用 awk 以段落模式（由空行分隔）来安全地删除整个 peer 块
+    # 这种方法兼容性更好，可以避免 mawk 等 awk 实现中的 for 循环解析问题
     awk -v key_to_remove="$client_pub_key" '
-        BEGIN { RS = ""; FS = "\n" }
-        {
-            is_target = 0
-            for (i=1; i<=NF; i++) {
-                if ($i ~ "PublicKey = " key_to_remove) {
-                    is_target = 1
-                    break
-                }
-            }
-            if (!is_target) {
-                # 打印非目标的块，并保留其后的记录分隔符（空行）
-                print $0 (RT ? RT : "")
-            }
-        }
+        BEGIN { RS = ""; ORS = "\n\n" }
+        # 如果当前记录(一个 Peer 块)不包含要移除的公钥则打印它
+        ! /PublicKey = / && ! /AllowedIPs = / || $0 !~ "PublicKey = " key_to_remove
     ' /etc/wireguard/wg0.conf.bak > /etc/wireguard/wg0.conf
 
     # 3. 删除客户端的配置文件
     rm -f "/etc/wireguard/${client_name}.conf"
 
     echo -e "\\n=============================================================="
-    echo "🎉 客户端 '$client_name' 已成功删除。"
+    echo "🎉 客户端 ${client_name}  已成功删除。"
     echo "=============================================================="
 }
 
