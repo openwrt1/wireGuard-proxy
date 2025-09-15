@@ -271,37 +271,98 @@ wireguard_install(){
         fi
     fi
 
-	# 智能获取主网络接口，兼容 IPv4/IPv6-only 环境
-   	net_interface=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}')
-   	if [ -z "$net_interface" ]; then
-   		# 如果 IPv4 失败，则尝试 IPv6
-   		net_interface=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}')
-   	fi
-   	echo "检测到主网络接口为: $net_interface"
+    # 智能获取主网络接口，兼容 IPv4/IPv6-only 环境
+    # 优先尝试 IPv4 路由采样，然后回退到 default route，再回退到第一个非 loopback 接口
+    net_interface=""
+    net_interface=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}' | head -n1)
+    if [ -z "$net_interface" ]; then
+        # IPv4 失败，尝试默认路由解析
+        net_interface=$(ip route show default 2>/dev/null | awk '/default/ && /dev/ {for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}' | head -n1)
+    fi
+    if [ -z "$net_interface" ]; then
+        # 再尝试 IPv6 路由采样
+        net_interface=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}' | head -n1)
+    fi
 
-       # --- 调试信息开始 ---
-       echo "【调试】准备修改防火墙规则，当前文件内容（前5行）："
-       head -n 5 /etc/ufw/before.rules
-       # --- 调试信息结束 ---
+    # 最后回退到第一个非 loopback 的接口
+    if [ -z "$net_interface" ]; then
+        net_interface=$(ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$' | head -n1)
+    fi
 
-       # 在 UFW 启动前，提前将 NAT 规则写入文件
-   	if ! grep -q "POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE" /etc/ufw/before.rules; then
-   		# 使用占位符分两步写入，避免变量解析问题
-   		sed -i "1s;^;*nat\\n:POSTROUTING ACCEPT [0:0]\\n-A POSTROUTING -s 10.0.0.0/24 -o __NET_INTERFACE__ -j MASQUERADE\\nCOMMIT\\n;" /etc/ufw/before.rules
-   		sed -i "s|__NET_INTERFACE__|$net_interface|g" /etc/ufw/before.rules
-           echo "【调试】已向 /etc/ufw/before.rules 添加 NAT 规则。"
-   	fi
-   	sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
-       echo "【调试】已将 /etc/default/ufw 的 FORWARD_POLICY 修改为 ACCEPT。"
+    # 验证接口名有效且存在（避免把 IP 地址误当作接口名）
+    if ! ip link show "$net_interface" >/dev/null 2>&1; then
+        echo "警告: 无法识别接口 '$net_interface'，尝试使用第一个非 loopback 接口。"
+        net_interface=$(ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$' | head -n1)
+    fi
 
-       # --- 调试信息开始 ---
-       echo "【调试】所有规则修改完毕，最终文件内容（前5行）："
-       head -n 5 /etc/ufw/before.rules
-       # --- 调试信息结束 ---
+    # 确保接口名不超过系统限制（IFNAMSIZ 通常为 15）
+    if [ ${#net_interface} -ge 15 ]; then
+        echo "警告: 检测到接口名过长('${net_interface}'), 这可能不是有效的接口名。尝试使用第一个非 loopback 接口。"
+        net_interface=$(ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$' | head -n1)
+    fi
 
-       # 确保所有规则都已就位后，再启动或重载 UFW
-       ufw --force enable
-       ufw reload
+    echo "检测到主网络接口为: $net_interface"
+
+    # --- 调试信息开始 ---
+    echo "【调试】准备修改防火墙规则，当前 /etc/ufw/before.rules 前 10 行："
+    head -n 10 /etc/ufw/before.rules 2>/dev/null || true
+    # --- 调试信息结束 ---
+
+    # 在 UFW 启动前，提前将 NAT 规则写入文件（只针对 IPv4 的 /etc/ufw/before.rules）
+    UFW_BEFORE=/etc/ufw/before.rules
+    MASQ_RULE="-A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE"
+
+    # 如果已存在相同的规则，则跳过；如果存在相同源但不同出口接口，则替换为当前接口
+    if grep -qF "-A POSTROUTING -s 10.0.0.0/24" "$UFW_BEFORE" 2>/dev/null; then
+        if grep -qF "$MASQ_RULE" "$UFW_BEFORE" 2>/dev/null; then
+            echo "【调试】已存在匹配的 NAT 规则，跳过添加。"
+        else
+            echo "【调试】发现已存在类似 NAT 规则但出口接口不同，正在替换为: $net_interface"
+            sed -ri "s|(-A POSTROUTING -s 10\.0\.0\.0/24 -o )[^[:space:]]+(-j MASQUERADE)|\1${net_interface}\2|" "$UFW_BEFORE" || true
+        fi
+    else
+        # 如果没有 *nat 块，则在文件顶部插入一个 nat 块
+        if ! grep -q "^\*nat" "$UFW_BEFORE" 2>/dev/null; then
+            # 将 nat 块插入到文件顶部，确保格式正确
+            sed -i "1s;^;*nat\n:POSTROUTING ACCEPT [0:0]\n${MASQ_RULE}\nCOMMIT\n;" "$UFW_BEFORE"
+            echo "【调试】已向 $UFW_BEFORE 添加新的 *nat 块和 MASQUERADE 规则。"
+        else
+            # 已有 nat 块但无规则，尝试在第一个 COMMIT 前插入规则
+            awk -v rule="$MASQ_RULE" '
+                BEGIN{in_nat=0; inserted=0}
+                /^\*nat/ {print; in_nat=1; next}
+                in_nat && /^COMMIT/ && !inserted {print rule; print; inserted=1; in_nat=0; next}
+                {print}
+            ' "$UFW_BEFORE" > "$UFW_BEFORE".tmp && mv "$UFW_BEFORE".tmp "$UFW_BEFORE"
+            echo "【调试】已在现有 *nat 块中插入 MASQUERADE 规则。"
+        fi
+    fi
+
+    # 确保转发策略为 ACCEPT
+    sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+    echo "【调试】已将 /etc/default/ufw 的 FORWARD_POLICY 修改为 ACCEPT。"
+
+    # --- 调试信息开始 ---
+    echo "【调试】修改后 /etc/ufw/before.rules 前 10 行："
+    head -n 10 /etc/ufw/before.rules 2>/dev/null || true
+    # --- 调试信息结束 ---
+
+    # 启动/重载 UFW，并在失败时给出诊断信息
+    if ! ufw --force enable 2>/tmp/ufw_enable.err || ! ufw reload 2>/tmp/ufw_reload.err; then
+        echo "错误: 启动或重载 UFW 时失败。收集诊断信息..."
+        echo "---- /etc/ufw/before.rules (前 200 行) ----"
+        head -n 200 /etc/ufw/before.rules 2>/dev/null || true
+        echo "---- ip link show ----"
+        ip -o link show
+        echo "---- ip -o addr show ----"
+        ip -o addr show
+        echo "---- ufw enable stderr ----"
+        sed -n '1,200p' /tmp/ufw_enable.err || true
+        echo "---- ufw reload stderr ----"
+        sed -n '1,200p' /tmp/ufw_reload.err || true
+        echo "提示: 常见问题是 before.rules 包含了 IPv6 地址或不兼容的条目，或某些规则被误插入到 IPv4 文件中。"
+        echo "您可以手动检查 /etc/ufw/before.rules 或还原备份后重试。"
+    fi
 
    	# 在所有网络和防火墙规则配置完成后，再应用 sysctl 设置
    	sysctl -p
