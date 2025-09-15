@@ -406,7 +406,7 @@ wireguard_install(){
 		[Peer]
 		# Client: client
 		PublicKey = $c2
-		AllowedIPs = 10.0.0.2/32
+		AllowedIPs = 10.0.0.2/32        cp -a /etc/ufw/before.rules /root/before.rules.final.bak.$(date +%s)
 	EOF
 
 	echo "正在创建客户端配置文件 client.conf..."
@@ -624,7 +624,7 @@ delete_client() {
     awk -v key_to_remove="$client_pub_key" '
         BEGIN { RS = ""; ORS = "\n\n" }
         # 如果当前记录(一个 Peer 块)不包含要移除的公钥则打印它
-        ! /PublicKey = / && ! /AllowedIPs = / || $0 !~ "PublicKey = " key_to_remove
+        (! /PublicKey = / && ! /AllowedIPs = /) || $0 !~ "PublicKey = " key_to_remove
     ' /etc/wireguard/wg0.conf.bak > /etc/wireguard/wg0.conf
 
     # 3. 删除客户端的配置文件

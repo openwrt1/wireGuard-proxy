@@ -92,11 +92,32 @@ wireguard_install() {
     local client_mtu
     local postup_rules=""
     local predown_rules=""
-    net_interface=$(ip -o -4 route show to default | awk '{print $5}')
-	echo "检测到主网络接口为: $net_interface"
 
-    postup_rules="iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
-    predown_rules="iptables -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
+    # 更稳健的接口检测，避免把 IPv6 字面量当作接口名
+    net_interface=""
+    net_interface=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}' | head -n1)
+    if [ -z "$net_interface" ]; then
+        net_interface=$(ip route show default 2>/dev/null | awk '/default/ && /dev/ {for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}' | head -n1)
+    fi
+    if [ -z "$net_interface" ]; then
+        net_interface=$(ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$' | head -n1)
+    fi
+
+    # 验证接口名合法性（存在且不包含 ':'，长度合理）
+    if ! ip link show "$net_interface" >/dev/null 2>&1 || echo "$net_interface" | grep -q ':' || [ ${#net_interface} -ge 15 ]; then
+        echo "警告: 检测到不合法或不可用接口 '$net_interface'，将跳过 NAT PostUp/PreDown 插入。"
+        net_interface=""
+    fi
+
+    echo "检测到主网络接口为: $net_interface"
+
+    if [ -n "$net_interface" ]; then
+        postup_rules="iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
+        predown_rules="iptables -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
+    else
+        postup_rules=""
+        predown_rules=""
+    fi
 
     if [ "$use_udp2raw" == "y" ]; then
         read -r -p "请输入 udp2raw 的 TCP 端口 [默认: 39001]: " tcp_port
@@ -397,7 +418,6 @@ start_menu() {
 		;;
 	esac
 }
-
 # --- 脚本入口 ---
 check_root
 check_alpine

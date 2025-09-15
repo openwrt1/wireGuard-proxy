@@ -268,36 +268,111 @@ wireguard_install() {
         fi
     fi
 
-	# 智能获取主网络接口，兼容 IPv4/IPv6-only 环境
-	net_interface=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}')
-	if [ -z "$net_interface" ]; then
-		# 如果 IPv4 失败，则尝试 IPv6
-		net_interface=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}')
-	fi
-	echo "检测到主网络接口为: $net_interface"
+    # 智能获取主网络接口，兼容 IPv4/IPv6-only 环境（更稳健的检测与写入）
+    net_interface=""
+    net_interface=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}' | head -n1)
+    if [ -z "$net_interface" ]; then
+        # 尝试默认路由
+        net_interface=$(ip route show default 2>/dev/null | awk '/default/ && /dev/ {for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}' | head -n1)
+    fi
+    if [ -z "$net_interface" ]; then
+        # 再尝试 IPv6 路由采样
+        net_interface=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}' | head -n1)
+    fi
+    if [ -z "$net_interface" ]; then
+        # 回退为第一个非 loopback 接口
+        net_interface=$(ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$' | head -n1)
+    fi
+
+    # 验证接口名有效且存在，避免把 IP 地址误当作接口名
+    if ! ip link show "$net_interface" >/dev/null 2>&1; then
+        echo "警告: 无法识别接口 '$net_interface'，尝试使用第一个非 loopback 接口。"
+        net_interface=$(ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$' | head -n1)
+    fi
+
+    # 不接受包含 ':' 的名字或过长的接口名
+    if echo "$net_interface" | grep -q ':' || [ ${#net_interface} -ge 15 ]; then
+        echo "警告: 检测到不合法接口名('$net_interface')，将跳过写入 NAT 规则。"
+        net_interface=""
+    fi
+
+    echo "检测到主网络接口为: $net_interface"
 
     # --- 调试信息开始 ---
-    echo "【调试】准备修改防火墙规则，当前文件内容（前5行）："
-    head -n 5 /etc/ufw/before.rules
+    echo "【调试】准备修改防火墙规则，当前 /etc/ufw/before.rules 前 10 行："
+    head -n 10 /etc/ufw/before.rules 2>/dev/null || true
     # --- 调试信息结束 ---
 
-	if ! grep -q "POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE" /etc/ufw/before.rules; then
-		# 使用占位符分两步写入，避免变量解析问题
-		sed -i "1s;^;*nat\\n:POSTROUTING ACCEPT [0:0]\\n-A POSTROUTING -s 10.0.0.0/24 -o __NET_INTERFACE__ -j MASQUERADE\\nCOMMIT\\n;" /etc/ufw/before.rules
-		sed -i "s|__NET_INTERFACE__|$net_interface|g" /etc/ufw/before.rules
-        echo "【调试】已向 /etc/ufw/before.rules 添加 NAT 规则。"
-	fi
-	sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+    UFW_BEFORE=/etc/ufw/before.rules
+
+    # 先备份
+    cp -a "$UFW_BEFORE" "${UFW_BEFORE}.bak.$(date +%s)" 2>/dev/null || true
+
+    # 如果接口合法则插入或替换规则
+    if [ -n "$net_interface" ] && grep -qF "-A POSTROUTING -s 10.0.0.0/24" "$UFW_BEFORE" 2>/dev/null; then
+        # 如果存在同源规则但接口不同则替换
+        if grep -qF "-A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE" "$UFW_BEFORE" 2>/dev/null; then
+            echo "【调试】已存在匹配的 NAT 规则，跳过添加。"
+        else
+            echo "【调试】发现已存在类似 NAT 规则但出口接口不同，正在替换为: $net_interface"
+            sed -ri "s|(-A POSTROUTING -s 10\.0\.0\.0/24 -o )[^[:space:]]+(-j MASQUERADE)|\1${net_interface}\2|" "$UFW_BEFORE" || true
+        fi
+    elif [ -n "$net_interface" ]; then
+        # 在文件顶部插入 *nat 区块或在现有 nat 中插入规则
+        if ! grep -q "^\*nat" "$UFW_BEFORE" 2>/dev/null; then
+            sed -i "1s;^;*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s 10.0.0.0/24 -o ${net_interface} -j MASQUERADE\nCOMMIT\n;" "$UFW_BEFORE"
+            echo "【调试】已向 $UFW_BEFORE 添加新的 *nat 块和 MASQUERADE 规则。"
+        else
+            awk -v rule="-A POSTROUTING -s 10.0.0.0/24 -o ${net_interface} -j MASQUERADE" '
+                BEGIN{in_nat=0; inserted=0}
+                /^\*nat/ {print; in_nat=1; next}
+                in_nat && /^COMMIT/ && !inserted {print rule; print; inserted=1; in_nat=0; next}
+                {print}
+            ' "$UFW_BEFORE" > "$UFW_BEFORE".tmp && mv "$UFW_BEFORE".tmp "$UFW_BEFORE"
+            echo "【调试】已在现有 *nat 块中插入 MASQUERADE 规则。"
+        fi
+    else
+        echo "【调试】未检测到合法接口，跳过插入 MASQUERADE 规则。"
+    fi
+
+    # 确保转发策略为 ACCEPT
+    sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
     echo "【调试】已将 /etc/default/ufw 的 FORWARD_POLICY 修改为 ACCEPT。"
 
+    # 去重可能存在的重复 nat 区块（保留第一个 nat 段）
+    awk '
+        BEGIN{in_nat=0; kept=0; skip=0}
+        /^\*nat/ {
+            if(in_nat==0 && kept==0){ in_nat=1; kept=1; print; next }
+            else { in_nat=1; skip=1; next }
+        }
+        in_nat==1 && /^COMMIT/ {
+            if(skip==1){ skip=0; in_nat=0; next } else { print; in_nat=0; next }
+        }
+        { if(in_nat==0) print }
+    ' "$UFW_BEFORE" > "$UFW_BEFORE".dedup && mv "$UFW_BEFORE".dedup "$UFW_BEFORE" || true
+
     # --- 调试信息开始 ---
-    echo "【调试】所有规则修改完毕，最终文件内容（前5行）："
-    head -n 5 /etc/ufw/before.rules
+    echo "【调试】修改后 /etc/ufw/before.rules 前 10 行："
+    head -n 10 /etc/ufw/before.rules 2>/dev/null || true
     # --- 调试信息结束 ---
 
-    # 确保所有规则都已就位后，再启动或重载 UFW
-    ufw --force enable
-    ufw reload
+    # 启动/重载 UFW，并在失败时给出诊断信息
+    if ! ufw --force enable 2>/tmp/ufw_enable.err || ! ufw reload 2>/tmp/ufw_reload.err; then
+        echo "错误: 启动或重载 UFW 时失败。收集诊断信息..."
+        echo "---- /etc/ufw/before.rules (前 200 行) ----"
+        head -n 200 /etc/ufw/before.rules 2>/dev/null || true
+        echo "---- ip link show ----"
+        ip -o link show
+        echo "---- ip -o addr show ----"
+        ip -o addr show
+        echo "---- ufw enable stderr ----"
+        sed -n '1,200p' /tmp/ufw_enable.err || true
+        echo "---- ufw reload stderr ----"
+        sed -n '1,200p' /tmp/ufw_reload.err || true
+        echo "提示: 常见问题是 before.rules 包含了 IPv6 地址或不兼容的条目，或某些规则被误插入到 IPv4 文件中。"
+        echo "您可以手动检查 /etc/ufw/before.rules 或还原备份后重试。"
+    fi
 
 	# 在所有网络和防火墙规则配置完成后，再应用 sysctl 设置
 	sysctl -p
@@ -531,7 +606,7 @@ delete_client() {
     awk -v key_to_remove="$client_pub_key" '
         BEGIN { RS = ""; ORS = "\n\n" }
         # 如果当前记录(一个 Peer 块)不包含要移除的公钥则打印它
-        ! /PublicKey = / && ! /AllowedIPs = / || $0 !~ "PublicKey = " key_to_remove
+        (! /PublicKey = / && ! /AllowedIPs = /) || $0 !~ "PublicKey = " key_to_remove
     ' /etc/wireguard/wg0.conf.bak > /etc/wireguard/wg0.conf
 
     # 3. 删除客户端的配置文件
