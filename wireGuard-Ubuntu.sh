@@ -149,7 +149,6 @@ wireguard_install(){
 	if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
 		echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 	fi
-	sysctl -p
 
 	# 创建一个文件来保存关键参数，方便后续添加用户
 	PARAMS_FILE="/etc/wireguard/params"
@@ -287,6 +286,9 @@ wireguard_install(){
 	fi
 	sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 	ufw reload
+
+	# 在所有网络和防火墙规则配置完成后，再应用 sysctl 设置
+	sysctl -p
 
 	echo "正在创建服务器配置文件 wg0.conf..."
 	cat > /etc/wireguard/wg0.conf <<-EOF
