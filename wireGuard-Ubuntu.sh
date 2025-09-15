@@ -238,7 +238,7 @@ wireguard_install(){
 
 			[Service]
 			Type=simple
-			ExecStart=/usr/local/bin/udp2raw -s -l 0.0.0.0:$tcp_port -r 127.0.0.1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor -a
+			ExecStart=/usr/local/bin/udp2raw -s -l [::]:$tcp_port -r 127.0.0.1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor -a
 			Restart=on-failure
 			RestartSec=5
 
