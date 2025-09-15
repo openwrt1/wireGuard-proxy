@@ -378,33 +378,31 @@ wireguard_install() {
 	sysctl -p
 
 	echo "正在创建服务器配置文件 wg0.conf..."
-	cat > /etc/wireguard/wg0.conf <<-EOF
-		[Interface]
-		PrivateKey = $s1
-		Address = 10.0.0.1/24
-		ListenPort = $wg_port
-		MTU = 1420
-
-		[Peer]
-		# Client: client
-		PublicKey = $c2
-		AllowedIPs = 10.0.0.2/32
-	EOF
+	(
+		printf "[Interface]\n"
+		printf "PrivateKey = %s\n" "$s1"
+		printf "Address = 10.0.0.1/24\n"
+		printf "ListenPort = %s\n" "$wg_port"
+		printf "MTU = 1420\n\n"
+		printf "[Peer]\n"
+		printf "# Client: client\n"
+		printf "PublicKey = %s\n" "$c2"
+		printf "AllowedIPs = 10.0.0.2/32\n"
+	) > /etc/wireguard/wg0.conf
 
 	echo "正在创建客户端配置文件 client.conf..."
-	cat > /etc/wireguard/client.conf <<-EOF
-		[Interface]
-		PrivateKey = $c1
-		Address = 10.0.0.2/24
-		DNS = 8.8.8.8
-		MTU = $client_mtu
-
-		[Peer]
-		PublicKey = $s2
-		Endpoint = $client_endpoint
-		AllowedIPs = 0.0.0.0/0, ::/0
-		PersistentKeepalive = 25
-	EOF
+	(
+		printf "[Interface]\n"
+		printf "PrivateKey = %s\n" "$c1"
+		printf "Address = 10.0.0.2/24\n"
+		printf "DNS = 8.8.8.8\n"
+		printf "MTU = %s\n\n" "$client_mtu"
+		printf "[Peer]\n"
+		printf "PublicKey = %s\n" "$s2"
+		printf "Endpoint = %s\n" "$client_endpoint"
+		printf "AllowedIPs = 0.0.0.0/0, ::/0\n"
+		printf "PersistentKeepalive = 25\n"
+	) > /etc/wireguard/client.conf
     chmod 600 /etc/wireguard/*.conf
 
 	echo "启动 WireGuard 服务..."
