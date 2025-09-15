@@ -310,10 +310,20 @@ wireguard_install(){
 
     # 在 UFW 启动前，提前将 NAT 规则写入文件（只针对 IPv4 的 /etc/ufw/before.rules）
     UFW_BEFORE=/etc/ufw/before.rules
+
+    # 先备份文件以便回滚
+    cp -a "$UFW_BEFORE" "${UFW_BEFORE}.bak.$(date +%s)" 2>/dev/null || true
+
+    # 检查 net_interface 是否为空或包含不合法字符（例如 IPv6 字面量包含 ':'）
+    if [ -z "$net_interface" ] || echo "$net_interface" | grep -q ':'; then
+        echo "错误: 检测到不合法的接口名 ('$net_interface')，将跳过向 $UFW_BEFORE 写入 MASQUERADE 规则。"
+        net_interface=""
+    fi
+
     MASQ_RULE="-A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE"
 
     # 如果已存在相同的规则，则跳过；如果存在相同源但不同出口接口，则替换为当前接口
-    if grep -qF "-A POSTROUTING -s 10.0.0.0/24" "$UFW_BEFORE" 2>/dev/null; then
+    if [ -n "$net_interface" ] && grep -qF "-A POSTROUTING -s 10.0.0.0/24" "$UFW_BEFORE" 2>/dev/null; then
         if grep -qF "$MASQ_RULE" "$UFW_BEFORE" 2>/dev/null; then
             echo "【调试】已存在匹配的 NAT 规则，跳过添加。"
         else
@@ -321,22 +331,40 @@ wireguard_install(){
             sed -ri "s|(-A POSTROUTING -s 10\.0\.0\.0/24 -o )[^[:space:]]+(-j MASQUERADE)|\1${net_interface}\2|" "$UFW_BEFORE" || true
         fi
     else
-        # 如果没有 *nat 块，则在文件顶部插入一个 nat 块
-        if ! grep -q "^\*nat" "$UFW_BEFORE" 2>/dev/null; then
-            # 将 nat 块插入到文件顶部，确保格式正确
-            sed -i "1s;^;*nat\n:POSTROUTING ACCEPT [0:0]\n${MASQ_RULE}\nCOMMIT\n;" "$UFW_BEFORE"
-            echo "【调试】已向 $UFW_BEFORE 添加新的 *nat 块和 MASQUERADE 规则。"
+        # 如果 net_interface 为空，则不插入任何规则，避免把空接口写入文件
+        if [ -z "$net_interface" ]; then
+            echo "【调试】未检测到合法接口，跳过插入 MASQUERADE 规则。"
         else
-            # 已有 nat 块但无规则，尝试在第一个 COMMIT 前插入规则
-            awk -v rule="$MASQ_RULE" '
-                BEGIN{in_nat=0; inserted=0}
-                /^\*nat/ {print; in_nat=1; next}
-                in_nat && /^COMMIT/ && !inserted {print rule; print; inserted=1; in_nat=0; next}
-                {print}
-            ' "$UFW_BEFORE" > "$UFW_BEFORE".tmp && mv "$UFW_BEFORE".tmp "$UFW_BEFORE"
-            echo "【调试】已在现有 *nat 块中插入 MASQUERADE 规则。"
+            # 如果没有 *nat 块，则在文件顶部插入一个 nat 块
+            if ! grep -q "^\*nat" "$UFW_BEFORE" 2>/dev/null; then
+                # 将 nat 块插入到文件顶部，确保格式正确
+                sed -i "1s;^;*nat\n:POSTROUTING ACCEPT [0:0]\n${MASQ_RULE}\nCOMMIT\n;" "$UFW_BEFORE"
+                echo "【调试】已向 $UFW_BEFORE 添加新的 *nat 块和 MASQUERADE 规则。"
+            else
+                # 已有 nat 块但无规则，尝试在第一个 COMMIT 前插入规则
+                awk -v rule="$MASQ_RULE" '
+                    BEGIN{in_nat=0; inserted=0}
+                    /^\*nat/ {print; in_nat=1; next}
+                    in_nat && /^COMMIT/ && !inserted {print rule; print; inserted=1; in_nat=0; next}
+                    {print}
+                ' "$UFW_BEFORE" > "$UFW_BEFORE".tmp && mv "$UFW_BEFORE".tmp "$UFW_BEFORE"
+                echo "【调试】已在现有 *nat 块中插入 MASQUERADE 规则。"
+            fi
         fi
     fi
+
+    # 合并/去重可能存在的重复 *nat 块（简单策略：保留第一个 *nat 到第一个 COMMIT 区间，移除后续的 nat 区块）
+    awk '
+        BEGIN{in_nat=0; kept=0; skip=0}
+        /^\*nat/ {
+            if(in_nat==0 && kept==0){ in_nat=1; kept=1; print; next }
+            else { in_nat=1; skip=1; next }
+        }
+        in_nat==1 && /^COMMIT/ {
+            if(skip==1){ skip=0; in_nat=0; next } else { print; in_nat=0; next }
+        }
+        { if(in_nat==0) print }
+    ' "$UFW_BEFORE" > "$UFW_BEFORE".dedup && mv "$UFW_BEFORE".dedup "$UFW_BEFORE" || true
 
     # 确保转发策略为 ACCEPT
     sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
