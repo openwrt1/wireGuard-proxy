@@ -282,7 +282,9 @@ wireguard_install(){
 
 	echo "检测到主网络接口为: $net_interface"
 	if ! grep -q "POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE" /etc/ufw/before.rules; then
-		sed -i "1s;^;*nat\\n:POSTROUTING ACCEPT [0:0]\\n-A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE\\nCOMMIT\\n;" /etc/ufw/before.rules
+		# 使用占位符分两步写入，避免变量解析问题
+		sed -i "1s;^;*nat\\n:POSTROUTING ACCEPT [0:0]\\n-A POSTROUTING -s 10.0.0.0/24 -o __NET_INTERFACE__ -j MASQUERADE\\nCOMMIT\\n;" /etc/ufw/before.rules
+		sed -i "s|__NET_INTERFACE__|$net_interface|g" /etc/ufw/before.rules
 	fi
 	sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 	ufw reload
