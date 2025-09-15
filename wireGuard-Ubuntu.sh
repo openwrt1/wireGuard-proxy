@@ -36,31 +36,62 @@ rand_port() {
 	echo $((RANDOM % (max - min) + min))
 }
 
+# 获取公网 IP 地址 (IPv4 和 IPv6)，增加冗余
+get_public_ips() {
+    # IPv4 API Endpoints
+    ipv4_apis=("https://api.ipify.org" "https://ipv4.icanhazip.com" "https://ifconfig.me/ip")
+    # IPv6 API Endpoints
+    ipv6_apis=("https://api64.ipify.org" "https://ipv6.icanhazip.com")
+
+    # 获取 IPv4
+    for api in "${ipv4_apis[@]}"; do
+        public_ipv4=$(curl -s -m 5 "$api")
+        if [ -n "$public_ipv4" ]; then
+            break
+        fi
+    done
+
+    # 获取 IPv6
+    for api in "${ipv6_apis[@]}"; do
+        public_ipv6=$(curl -s -m 5 "$api")
+        if [ -n "$public_ipv6" ]; then
+            break
+        fi
+    done
+}
+
 # 显示 Udp2raw 客户端配置信息
 display_udp2raw_info() {
-    local server_ip=$1
-    local tcp_port=$2
-    local udp2raw_password=$3
+    local server_ipv4=$1
+    local server_ipv6=$2
+    local tcp_port=$3
+    local udp2raw_password=$4
 
     printf "\\n=================== 客户端 Udp2raw 设置 ===================\\n"
     printf "伪装模式已启用，您需要在客户端上运行 udp2raw。\\n"
     printf "请从 https://github.com/wangyu-/udp2raw/releases 下载 udp2raw 二进制文件。\\n"
     printf "解压后，根据您的操作系统，在终端或命令行中运行对应命令：\\n"
     printf "\\n"
-    printf "服务器 TCP 端口: %s\\n" "$tcp_port"
-    printf "连接密码: %s\\n" "$udp2raw_password"
+    printf "服务器 TCP 端口: %s\n" "$tcp_port"
+    printf "连接密码: %s\n" "$udp2raw_password"
     printf "\\n"
-    printf "\\033[1;32m--- Linux 客户端 ---\\033[0m\\n"
-    printf "(根据您的架构选择 udp2raw_amd64, udp2raw_arm 等)\\n"
-    printf "./udp2raw_amd64 -c -l 127.0.0.1:29999 -r %s:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ip" "$tcp_port" "$udp2raw_password"
-    printf "\\n"
-    printf "\\033[1;32m--- macOS 客户端 ---\\033[0m\\n"
-    printf "(M1/M2/M3 芯片请用 udp2raw_mp_mac_m1)\\n"
-    printf "./udp2raw_mp_mac -c -l 127.0.0.1:29999 -r %s:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ip" "$tcp_port" "$udp2raw_password"
-    printf "\\n"
-    printf "\\033[1;32m--- Windows 客户端 (在 CMD 或 PowerShell 中运行) ---\\033[0m\\n"
-    printf "(推荐使用 udp2raw_mp.exe)\\n"
-    printf "udp2raw_mp.exe -c -l 127.0.0.1:29999 -r %s:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ip" "$tcp_port" "$udp2raw_password"
+
+    if [ -n "$server_ipv4" ]; then
+        printf "\\033[1;32m--- IPv4 连接命令 (推荐) ---\\033[0m\\n"
+        printf "Linux: ./udp2raw_amd64 -c -l 127.0.0.1:29999 -r %s:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ipv4" "$tcp_port" "$udp2raw_password"
+        printf "macOS: ./udp2raw_mp_mac -c -l 127.0.0.1:29999 -r %s:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ipv4" "$tcp_port" "$udp2raw_password"
+        printf "Windows: udp2raw_mp.exe -c -l 127.0.0.1:29999 -r %s:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ipv4" "$tcp_port" "$udp2raw_password"
+        printf "\\n"
+    fi
+
+    if [ -n "$server_ipv6" ]; then
+        printf "\\033[1;32m--- IPv6 连接命令 ---\\033[0m\\n"
+        printf "Linux: ./udp2raw_amd64 -c -l 127.0.0.1:29999 -r [%s]:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ipv6" "$tcp_port" "$udp2raw_password"
+        printf "macOS: ./udp2raw_mp_mac -c -l 127.0.0.1:29999 -r [%s]:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ipv6" "$tcp_port" "$udp2raw_password"
+        printf "Windows: udp2raw_mp.exe -c -l 127.0.0.1:29999 -r [%s]:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ipv6" "$tcp_port" "$udp2raw_password"
+        printf "\\n"
+    fi
+
     printf "\\n"
     printf "%s\\n" "--------------------------------------------------------------"
     printf "然后再启动 WireGuard 客户端。\\n"
@@ -104,8 +135,15 @@ wireguard_install(){
 	c1=$(cat cprivatekey)
 	c2=$(cat cpublickey)
 
-	server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
-
+	echo "正在获取公网 IP 地址..."
+    get_public_ips
+    if [ -z "$public_ipv4" ] && [ -z "$public_ipv6" ]; then
+        echo "错误: 无法获取公网 IP 地址。请检查网络连接或 DNS 设置。" >&2
+        exit 1
+    fi
+    echo "检测到 IPv4: ${public_ipv4:-N/A}"
+    echo "检测到 IPv6: ${public_ipv6:-N/A}"
+    
 	echo "配置系统网络转发..."
 	sed -i '/net.ipv4.ip_forward=1/s/^#//' /etc/sysctl.conf
 	if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
@@ -115,7 +153,10 @@ wireguard_install(){
 
 	# 创建一个文件来保存关键参数，方便后续添加用户
 	PARAMS_FILE="/etc/wireguard/params"
-	echo "SERVER_IP=$server_ip" > "$PARAMS_FILE"
+    {
+        echo "SERVER_IPV4=${public_ipv4}"
+        echo "SERVER_IPV6=${public_ipv6}"
+    } > "$PARAMS_FILE"
 
 	echo "配置防火墙 (UFW)..."
 	ufw allow ssh
@@ -222,7 +263,13 @@ wireguard_install(){
 
         echo "开放 WireGuard 的 UDP 端口: $wg_port"
         ufw allow "$wg_port"/udp
-        client_endpoint="$server_ip:$wg_port"
+        # 优先使用 IPv4 作为默认 Endpoint
+        if [ -n "$public_ipv4" ]; then
+            client_endpoint="$public_ipv4:$wg_port"
+        else
+            # 如果没有 IPv4，则使用 IPv6，并用方括号括起来
+            client_endpoint="[$public_ipv6]:$wg_port"
+        fi
     fi
 
 	ufw --force enable
@@ -280,7 +327,7 @@ wireguard_install(){
 	echo "=============================================================="
 
     if [ "$use_udp2raw" == "y" ]; then
-        display_udp2raw_info "$server_ip" "$tcp_port" "$udp2raw_password"
+        display_udp2raw_info "$public_ipv4" "$public_ipv6" "$tcp_port" "$udp2raw_password"
     fi
 }
 
@@ -350,7 +397,8 @@ add_new_client() {
     local client_endpoint
     local client_mtu
     local USE_UDP2RAW="false" # 为变量提供默认值以提高健壮性并消除 shellcheck 警告
-    local SERVER_IP=""        # 同上
+    local SERVER_IPV4=""      # 同上
+    local SERVER_IPV6=""      # 同上
     local WG_PORT=""          # 同上
     local TCP_PORT=""         # 同上
 
@@ -364,9 +412,14 @@ add_new_client() {
         client_endpoint="127.0.0.1:29999"
         client_mtu=1280
     else
-        server_ip="$SERVER_IP"
         server_port="$WG_PORT"
-        client_endpoint="${server_ip}:${server_port}"
+        # 优先使用 IPv4 作为默认 Endpoint
+        if [ -n "$SERVER_IPV4" ]; then
+            client_endpoint="${SERVER_IPV4}:${server_port}"
+        else
+            # 如果没有 IPv4，则使用 IPv6，并用方括号括起来
+            client_endpoint="[${SERVER_IPV6}]:${server_port}"
+        fi
         client_mtu=1420
     fi
 
@@ -397,8 +450,8 @@ add_new_client() {
         echo "提醒: 您的服务正在使用 udp2raw，新客户端也需要按以下信息配置。"
 
         # 直接从变量显示信息
-        if [ -n "$SERVER_IP" ] && [ -n "$TCP_PORT" ] && [ -n "$UDP2RAW_PASSWORD" ]; then
-            display_udp2raw_info "$SERVER_IP" "$TCP_PORT" "$UDP2RAW_PASSWORD"
+        if [ -n "$TCP_PORT" ] && [ -n "$UDP2RAW_PASSWORD" ]; then
+            display_udp2raw_info "$SERVER_IPV4" "$SERVER_IPV6" "$TCP_PORT" "$UDP2RAW_PASSWORD"
         else
             echo "警告: 无法从 /etc/wireguard/params 中自动提取 udp2raw 配置信息。"
             echo "请手动检查您的 udp2raw 客户端配置。"
