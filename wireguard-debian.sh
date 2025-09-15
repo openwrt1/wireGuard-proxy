@@ -8,7 +8,8 @@
 # 2. 卸载 WireGuard
 # 3. 添加新用户
 # 4. 删除用户
-# 5. 智能安装检测，防止重复执行
+# 5. 优化系统 (升级内核并开启 BBR)
+# 6. 智能安装检测，防止重复执行
 #================================================================================
 
 # --- 全局函数和变量 ---
@@ -36,66 +37,59 @@ rand_port() {
 	echo $((RANDOM % (max - min) + min))
 }
 
-# 获取公网 IP 地址 (IPv4 和 IPv6)，增加冗余
-get_public_ips() {
-    # IPv4 API Endpoints
-    ipv4_apis=("https://api.ipify.org" "https://ipv4.icanhazip.com" "https://ifconfig.me/ip")
-    # IPv6 API Endpoints
-    ipv6_apis=("https://api64.ipify.org" "https://ipv6.icanhazip.com")
+# 初始系统状态检查
+initial_check() {
+    kernel_version=$(uname -r)
+    bbr_status=$(sysctl -n net.ipv4.tcp_congestion_control)
 
-    # 获取 IPv4
-    for api in "${ipv4_apis[@]}"; do
-        public_ipv4=$(curl -s -m 5 "$api")
-        if [ -n "$public_ipv4" ]; then
-            break
-        fi
-    done
+    echo "==================== 系统状态检查 ===================="
+    echo "当前内核版本: $kernel_version"
+    if [[ "$kernel_version" =~ ^[5-9]\. || "$kernel_version" =~ ^[1-9][0-9]+\. ]]; then
+        echo -e "状态: \033[0;32m良好 (推荐内核)\033[0m"
+    else
+        echo -e "状态: \033[0;33m过旧 (建议升级内核以获得最佳性能)\033[0m"
+    fi
 
-    # 获取 IPv6
-    for api in "${ipv6_apis[@]}"; do
-        public_ipv6=$(curl -s -m 5 "$api")
-        if [ -n "$public_ipv6" ]; then
-            break
-        fi
-    done
+    echo "TCP 拥塞控制算法: $bbr_status"
+    if [ "$bbr_status" = "bbr" ]; then
+        echo -e "状态: \033[0;32mBBR 已开启\033[0m"
+    else
+        echo -e "状态: \033[0;33mBBR 未开启 (建议开启以优化网络)\033[0m"
+    fi
+    echo "======================================================"
+    echo
 }
+
 
 # 显示 Udp2raw 客户端配置信息
 display_udp2raw_info() {
-    local server_ipv4=$1
-    local server_ipv6=$2
-    local tcp_port=$3
-    local udp2raw_password=$4
+    local server_ip=$1
+    local tcp_port=$2
+    local udp2raw_password=$3
 
-    printf "\\n=================== 客户端 Udp2raw 设置 ===================\\n"
-    printf "伪装模式已启用，您需要在客户端上运行 udp2raw。\\n"
-    printf "请从 https://github.com/wangyu-/udp2raw/releases 下载 udp2raw 二进制文件。\\n"
-    printf "解压后，根据您的操作系统，在终端或命令行中运行对应命令：\\n"
-    printf "\\n"
-    printf "服务器 TCP 端口: %s\n" "$tcp_port"
-    printf "连接密码: %s\n" "$udp2raw_password"
-    printf "\\n"
-
-    if [ -n "$server_ipv4" ]; then
-        printf "\\033[1;32m--- IPv4 连接命令 (推荐) ---\\033[0m\\n"
-        printf "Linux: ./udp2raw_amd64 -c -l 127.0.0.1:29999 -r %s:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ipv4" "$tcp_port" "$udp2raw_password"
-        printf "macOS: ./udp2raw_mp_mac -c -l 127.0.0.1:29999 -r %s:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ipv4" "$tcp_port" "$udp2raw_password"
-        printf "Windows: udp2raw_mp.exe -c -l 127.0.0.1:29999 -r %s:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ipv4" "$tcp_port" "$udp2raw_password"
-        printf "\\n"
-    fi
-
-    if [ -n "$server_ipv6" ]; then
-        printf "\\033[1;32m--- IPv6 连接命令 ---\\033[0m\\n"
-        printf "Linux: ./udp2raw_amd64 -c -l 127.0.0.1:29999 -r [%s]:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ipv6" "$tcp_port" "$udp2raw_password"
-        printf "macOS: ./udp2raw_mp_mac -c -l 127.0.0.1:29999 -r [%s]:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ipv6" "$tcp_port" "$udp2raw_password"
-        printf "Windows: udp2raw_mp.exe -c -l 127.0.0.1:29999 -r [%s]:%s -k \"%s\" --raw-mode faketcp --cipher-mode xor\\n" "$server_ipv6" "$tcp_port" "$udp2raw_password"
-        printf "\\n"
-    fi
-
-    printf "\\n"
-    printf "%s\\n" "--------------------------------------------------------------"
-    printf "然后再启动 WireGuard 客户端。\\n"
-    printf "==============================================================\\n"
+    echo -e "\n=================== 客户端 Udp2raw 设置 ==================="
+    echo "伪装模式已启用，您需要在客户端上运行 udp2raw。"
+    echo "请从 https://github.com/wangyu-/udp2raw/releases 下载 udp2raw 二进制文件。"
+    echo "解压后，根据您的操作系统，在终端或命令行中运行对应命令："
+    echo ""
+    echo "服务器 TCP 端口: $tcp_port"
+    echo "连接密码: $udp2raw_password"
+    echo ""
+    echo -e "\033[1;32m--- Linux 客户端 ---\033[0m"
+    echo "(根据您的架构选择 udp2raw_amd64, udp2raw_arm 等)"
+    echo "./udp2raw_amd64 -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
+    echo ""
+    echo -e "\033[1;32m--- macOS 客户端 ---\033[0m"
+    echo "(M1/M2/M3 芯片请用 udp2raw_mp_mac_m1)"
+    echo "./udp2raw_mp_mac -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor"
+    echo ""
+    echo -e "\033[1;32m--- Windows 客户端 (在 CMD 或 PowerShell 中运行) ---\033[0m"
+    echo "(推荐使用 udp2raw_mp.exe)"
+    echo "udp2raw_mp.exe -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
+    echo ""
+    echo "--------------------------------------------------------------"
+    echo "然后再启动 WireGuard 客户端。"
+    echo "=============================================================="
 }
 
 
@@ -134,31 +128,14 @@ wireguard_install() {
 	c1=$(cat cprivatekey)
 	c2=$(cat cpublickey)
 
-    echo "正在获取公网 IP 地址..."
-    get_public_ips
-    if [ -z "$public_ipv4" ] && [ -z "$public_ipv6" ]; then
-        echo "错误: 无法获取公网 IP 地址。请检查网络连接或 DNS 设置。" >&2
-        exit 1
-    fi
-    echo "检测到 IPv4: ${public_ipv4:-N/A}"
-    echo "检测到 IPv6: ${public_ipv6:-N/A}"
+	server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
     
 	echo "配置系统网络转发..."
 	sed -i '/net.ipv4.ip_forward=1/s/^#//' /etc/sysctl.conf
 	if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
 		echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 	fi
-	# 开启 IPv6 转发
-	sed -i '/net.ipv6.conf.all.forwarding=1/s/^#//' /etc/sysctl.conf
-	if ! grep -q "net.ipv6.conf.all.forwarding=1" /etc/sysctl.conf; then
-		echo "net.ipv6.conf.all.forwarding=1" >> /etc/sysctl.conf
-	fi
-	# 创建一个文件来保存关键参数，方便后续添加用户
-	PARAMS_FILE="/etc/wireguard/params"
-    {
-        echo "SERVER_IPV4=${public_ipv4}"
-        echo "SERVER_IPV6=${public_ipv6}"
-    } > "$PARAMS_FILE"
+	sysctl -p
 
 	echo "配置防火墙 (UFW)..."
 	ufw allow ssh
@@ -173,11 +150,7 @@ wireguard_install() {
         wg_port=$(rand_port) # 内部 WG 端口保持随机
         client_mtu=1280 # udp2raw 需要更小的 MTU
         udp2raw_password=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
-        {
-            echo "USE_UDP2RAW=true"
-            echo "TCP_PORT=$tcp_port"
-            echo "UDP2RAW_PASSWORD=$udp2raw_password"
-        } >> "$PARAMS_FILE"
+        
         echo "开放 udp2raw 的 TCP 端口: $tcp_port"
         ufw allow "$tcp_port"/tcp
 
@@ -240,7 +213,7 @@ wireguard_install() {
 
 			[Service]
 			Type=simple
-			ExecStart=/usr/local/bin/udp2raw -s -l [::]:$tcp_port -r 127.0.0.1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor
+			ExecStart=/usr/local/bin/udp2raw -s -l 0.0.0.0:$tcp_port -r 127.0.0.1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor -a
 			Restart=on-failure
 			RestartSec=5
 
@@ -256,164 +229,51 @@ wireguard_install() {
     else
         read -r -p "请输入 WireGuard 的 UDP 端口 [默认: 39000]: " wg_port
         wg_port=${wg_port:-39000}
-        {
-            echo "USE_UDP2RAW=false"
-            echo "WG_PORT=$wg_port"
-        } >> "$PARAMS_FILE"
         client_mtu=1420
 
         echo "开放 WireGuard 的 UDP 端口: $wg_port"
         ufw allow "$wg_port"/udp
-        # 优先使用 IPv4 作为默认 Endpoint
-        if [ -n "$public_ipv4" ]; then
-            client_endpoint="$public_ipv4:$wg_port"
-        else
-            # 如果没有 IPv4，则使用 IPv6，并用方括号括起来
-            client_endpoint="[$public_ipv6]:$wg_port"
-        fi
+        client_endpoint="$server_ip:$wg_port"
     fi
 
-    # 智能获取主网络接口，兼容 IPv4/IPv6-only 环境（更稳健的检测与写入）
-    net_interface=""
-    net_interface=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}' | head -n1)
-    if [ -z "$net_interface" ]; then
-        # 尝试默认路由
-        net_interface=$(ip route show default 2>/dev/null | awk '/default/ && /dev/ {for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}' | head -n1)
-    fi
-    if [ -z "$net_interface" ]; then
-        # 再尝试 IPv6 路由采样
-        net_interface=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}' | head -n1)
-    fi
-    if [ -z "$net_interface" ]; then
-        # 回退为第一个非 loopback 接口
-        net_interface=$(ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$' | head -n1)
-    fi
+	ufw --force enable
 
-    # 验证接口名有效且存在，避免把 IP 地址误当作接口名
-    if ! ip link show "$net_interface" >/dev/null 2>&1; then
-        echo "警告: 无法识别接口 '$net_interface'，尝试使用第一个非 loopback 接口。"
-        net_interface=$(ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$' | head -n1)
-    fi
-
-    # 不接受包含 ':' 的名字或过长的接口名
-    if echo "$net_interface" | grep -q ':' || [ ${#net_interface} -ge 15 ]; then
-        echo "警告: 检测到不合法接口名('$net_interface')，将跳过写入 NAT 规则。"
-        net_interface=""
-    fi
-
-    echo "检测到主网络接口为: $net_interface"
-
-    # --- 调试信息开始 ---
-    echo "【调试】准备修改防火墙规则，当前 /etc/ufw/before.rules 前 10 行："
-    head -n 10 /etc/ufw/before.rules 2>/dev/null || true
-    # --- 调试信息结束 ---
-
-    UFW_BEFORE=/etc/ufw/before.rules
-
-    # 先备份
-    cp -a "$UFW_BEFORE" "${UFW_BEFORE}.bak.$(date +%s)" 2>/dev/null || true
-
-    # 如果接口合法则插入或替换规则
-    if [ -n "$net_interface" ] && grep -qF "-A POSTROUTING -s 10.0.0.0/24" "$UFW_BEFORE" 2>/dev/null; then
-        # 如果存在同源规则但接口不同则替换
-        if grep -qF "-A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE" "$UFW_BEFORE" 2>/dev/null; then
-            echo "【调试】已存在匹配的 NAT 规则，跳过添加。"
-        else
-            echo "【调试】发现已存在类似 NAT 规则但出口接口不同，正在替换为: $net_interface"
-            sed -ri "s|(-A POSTROUTING -s 10\.0\.0\.0/24 -o )[^[:space:]]+(-j MASQUERADE)|\1${net_interface}\2|" "$UFW_BEFORE" || true
-        fi
-    elif [ -n "$net_interface" ]; then
-        # 在文件顶部插入 *nat 区块或在现有 nat 中插入规则
-        if ! grep -q "^\*nat" "$UFW_BEFORE" 2>/dev/null; then
-            sed -i "1s;^;*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s 10.0.0.0/24 -o ${net_interface} -j MASQUERADE\nCOMMIT\n;" "$UFW_BEFORE"
-            echo "【调试】已向 $UFW_BEFORE 添加新的 *nat 块和 MASQUERADE 规则。"
-        else
-            awk -v rule="-A POSTROUTING -s 10.0.0.0/24 -o ${net_interface} -j MASQUERADE" '
-                BEGIN{in_nat=0; inserted=0}
-                /^\*nat/ {print; in_nat=1; next}
-                in_nat && /^COMMIT/ && !inserted {print rule; print; inserted=1; in_nat=0; next}
-                {print}
-            ' "$UFW_BEFORE" > "$UFW_BEFORE".tmp && mv "$UFW_BEFORE".tmp "$UFW_BEFORE"
-            echo "【调试】已在现有 *nat 块中插入 MASQUERADE 规则。"
-        fi
-    else
-        echo "【调试】未检测到合法接口，跳过插入 MASQUERADE 规则。"
-    fi
-
-    # 确保转发策略为 ACCEPT
-    sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
-    echo "【调试】已将 /etc/default/ufw 的 FORWARD_POLICY 修改为 ACCEPT。"
-
-    # 去重可能存在的重复 nat 区块（保留第一个 nat 段）
-    awk '
-        BEGIN{in_nat=0; kept=0; skip=0}
-        /^\*nat/ {
-            if(in_nat==0 && kept==0){ in_nat=1; kept=1; print; next }
-            else { in_nat=1; skip=1; next }
-        }
-        in_nat==1 && /^COMMIT/ {
-            if(skip==1){ skip=0; in_nat=0; next } else { print; in_nat=0; next }
-        }
-        { if(in_nat==0) print }
-    ' "$UFW_BEFORE" > "$UFW_BEFORE".dedup && mv "$UFW_BEFORE".dedup "$UFW_BEFORE" || true
-
-    # --- 调试信息开始 ---
-    echo "【调试】修改后 /etc/ufw/before.rules 前 10 行："
-    head -n 10 /etc/ufw/before.rules 2>/dev/null || true
-    # --- 调试信息结束 ---
-
-    # 启动/重载 UFW，并在失败时给出诊断信息
-    if ! ufw --force enable 2>/tmp/ufw_enable.err || ! ufw reload 2>/tmp/ufw_reload.err; then
-        echo "错误: 启动或重载 UFW 时失败。收集诊断信息..."
-        echo "---- /etc/ufw/before.rules (前 200 行) ----"
-        head -n 200 /etc/ufw/before.rules 2>/dev/null || true
-        echo "---- ip link show ----"
-        ip -o link show
-        echo "---- ip -o addr show ----"
-        ip -o addr show
-        echo "---- ufw enable stderr ----"
-        sed -n '1,200p' /tmp/ufw_enable.err || true
-        echo "---- ufw reload stderr ----"
-        sed -n '1,200p' /tmp/ufw_reload.err || true
-        echo "提示: 常见问题是 before.rules 包含了 IPv6 地址或不兼容的条目，或某些规则被误插入到 IPv4 文件中。"
-        echo "您可以手动检查 /etc/ufw/before.rules 或还原备份后重试。"
-    fi
-
-	# 在所有网络和防火墙规则配置完成后，再应用 sysctl 设置
-	sysctl -p
-
-	# 为 IPv6 添加 MASQUERADE 规则
-	echo "【信息】为 IPv6 添加防火墙转发规则..."
-	ip6tables -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o "$net_interface" -j MASQUERADE
+	net_interface=$(ip -o -4 route show to default | awk '{print $5}')
+	echo "检测到主网络接口为: $net_interface"
+	if ! grep -q "POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE" /etc/ufw/before.rules; then
+		sed -i "1s;^;*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE\nCOMMIT\n;" /etc/ufw/before.rules
+	fi
+	sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+	ufw reload
 
 	echo "正在创建服务器配置文件 wg0.conf..."
-	(
-		printf "[Interface]\n"
-		printf "PrivateKey = %s\n" "$s1"
-		printf "Address = 10.0.0.1/24\n"
-		printf "ListenPort = %s\n" "$wg_port"
-		printf "MTU = 1420\n\n"
-		printf "Address = fd86:ea04:1111::1/64\n"
-		printf "[Peer]\n"
-		printf "# Client: client\n"
-		printf "PublicKey = %s\n" "$c2"
-		printf "AllowedIPs = 10.0.0.2/32, fd86:ea04:1111::2/128\n"
-	) > /etc/wireguard/wg0.conf
+	cat > /etc/wireguard/wg0.conf <<-EOF
+		[Interface]
+		PrivateKey = $s1
+		Address = 10.0.0.1/24
+		ListenPort = $wg_port
+		MTU = 1420
+
+		[Peer]
+		# Client: client
+		PublicKey = $c2
+		AllowedIPs = 10.0.0.2/32
+	EOF
 
 	echo "正在创建客户端配置文件 client.conf..."
-	(
-		printf "[Interface]\n"
-		printf "PrivateKey = %s\n" "$c1"
-		printf "Address = 10.0.0.2/24\n"
-		printf "Address = fd86:ea04:1111::2/64\n"
-		printf "DNS = 8.8.8.8, 2001:4860:4860::8888\n"
-		printf "MTU = %s\n\n" "$client_mtu"
-		printf "[Peer]\n"
-		printf "PublicKey = %s\n" "$s2"
-		printf "Endpoint = %s\n" "$client_endpoint"
-		printf "AllowedIPs = 0.0.0.0/0, ::/0\n"
-		printf "PersistentKeepalive = 25\n"
-	) > /etc/wireguard/client.conf
+	cat > /etc/wireguard/client.conf <<-EOF
+		[Interface]
+		PrivateKey = $c1
+		Address = 10.0.0.2/24
+		DNS = 8.8.8.8
+		MTU = $client_mtu
+
+		[Peer]
+		PublicKey = $s2
+		Endpoint = $client_endpoint
+		AllowedIPs = 0.0.0.0/0, ::/0
+		PersistentKeepalive = 25
+	EOF
     chmod 600 /etc/wireguard/*.conf
 
 	echo "启动 WireGuard 服务..."
@@ -421,7 +281,7 @@ wireguard_install() {
 	wg-quick up wg0 || { echo "错误: 启动 WireGuard 接口 wg0 失败。" >&2; exit 1; }
 	systemctl enable wg-quick@wg0
 
-	echo -e "\\n=============================================================="
+	echo -e "\n=============================================================="
 	echo "🎉 WireGuard 安装完成! 🎉"
 	echo "=============================================================="
 	echo "服务器配置: /etc/wireguard/wg0.conf"
@@ -431,7 +291,7 @@ wireguard_install() {
 	echo "=============================================================="
 
     if [ "$use_udp2raw" == "y" ]; then
-        display_udp2raw_info "$public_ipv4" "$public_ipv6" "$tcp_port" "$udp2raw_password"
+        display_udp2raw_info "$server_ip" "$tcp_port" "$udp2raw_password"
     fi
 }
 
@@ -455,7 +315,7 @@ wireguard_uninstall() {
 	echo "跳过防火墙重置，以避免影响宝塔面板等服务。"
 	echo "请手动删除为 WireGuard 或 udp2raw 开放的端口。"
 
-	echo -e "\\n=============================================================="
+	echo -e "\n=============================================================="
 	echo "🎉 WireGuard 及 Udp2raw 已成功卸载。"
 	echo "=============================================================="
 }
@@ -472,10 +332,14 @@ add_new_client() {
     client_name=$(echo "$client_name" | tr -dc '[:alnum:]_-')
     if [ -f "/etc/wireguard/${client_name}.conf" ]; then echo "错误: 名为 ${client_name} 的客户端配置已存在。"; exit 1; fi
 
-    last_ip_octet=$(grep -oP 'AllowedIPs = 10.0.0.\\K[0-9]+' /etc/wireguard/wg0.conf | sort -n | tail -1)
-    next_ip_octet=$((last_ip_octet + 1))
+    last_ip_octet=$(grep -oP 'AllowedIPs = 10.0.0.\K[0-9]+' /etc/wireguard/wg0.conf | sort -n | tail -1)
+    if [ -z "$last_ip_octet" ]; then
+        next_ip_octet=2
+    else
+        next_ip_octet=$((last_ip_octet + 1))
+    fi
+
     if [ "$next_ip_octet" -gt 254 ]; then echo "错误: IP 地址池已满。"; exit 1; fi
-    new_client_ipv6="fd86:ea04:1111::${next_ip_octet}/128"
     new_client_ip="10.0.0.${next_ip_octet}/32"
     echo "为新客户端分配的 IP 地址: 10.0.0.${next_ip_octet}"
 
@@ -485,54 +349,36 @@ add_new_client() {
 
     echo "正在更新服务器配置..."
     # 使用更安全的方式热添加 peer，而不是重启整个服务
-    wg set wg0 peer "$new_client_public_key" allowed-ips "$new_client_ip, $new_client_ipv6"
+    wg set wg0 peer "$new_client_public_key" allowed-ips "$new_client_ip"
     # 同时也将配置持久化到文件
     cat >> /etc/wireguard/wg0.conf <<-EOF
 
 		[Peer]
 		# Client: $client_name
 		PublicKey = $new_client_public_key
-		AllowedIPs = $new_client_ip, $new_client_ipv6
+		AllowedIPs = $new_client_ip
 	EOF
 
     echo "正在创建客户端配置文件 /etc/wireguard/${client_name}.conf..."
     server_public_key=$(cat /etc/wireguard/spublickey)
-    PARAMS_FILE="/etc/wireguard/params"
     
     local client_endpoint
     local client_mtu
-    local USE_UDP2RAW="false" # 为变量提供默认值以提高健壮性并消除 shellcheck 警告
-    local SERVER_IPV4=""      # 同上
-    local SERVER_IPV6=""      # 同上
-    local WG_PORT=""          # 同上
-    local TCP_PORT=""         # 同上
-
-    # 从参数文件中读取配置，而不是实时检测
-    # shellcheck source=/etc/wireguard/params
-    if [ -f "$PARAMS_FILE" ]; then
-        source "$PARAMS_FILE"
-    fi
-
-    if [ "$USE_UDP2RAW" = "true" ]; then
+    if systemctl -q is-active udp2raw; then
         client_endpoint="127.0.0.1:29999"
         client_mtu=1280
     else
-        server_port="$WG_PORT"
-        # 优先使用 IPv4 作为默认 Endpoint
-        if [ -n "$SERVER_IPV4" ]; then
-            client_endpoint="${SERVER_IPV4}:${server_port}"
-        else
-            # 如果没有 IPv4，则使用 IPv6，并用方括号括起来
-            client_endpoint="[${SERVER_IPV6}]:${server_port}"
-        fi
+        server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
+        server_port=$(grep -oP 'ListenPort = \K[0-9]+' /etc/wireguard/wg0.conf)
+        client_endpoint="$server_ip:$server_port"
         client_mtu=1420
     fi
 
     cat > "/etc/wireguard/${client_name}.conf" <<-EOF
 		[Interface]
 		PrivateKey = $new_client_private_key
-		Address = 10.0.0.${next_ip_octet}/24, fd86:ea04:1111::${next_ip_octet}/64
-		DNS = 8.8.8.8, 2001:4860:4860::8888
+		Address = 10.0.0.${next_ip_octet}/24
+		DNS = 8.8.8.8
 		MTU = $client_mtu
 
 		[Peer]
@@ -543,8 +389,8 @@ add_new_client() {
 	EOF
 	chmod 600 "/etc/wireguard/${client_name}.conf"
 
-    echo -e "\\n=============================================================="
-    echo "🎉 新客户端 ${client_name} 添加成功! 🎉"
+    echo -e "\n=============================================================="
+    echo "🎉 新客户端 '$client_name' 添加成功! 🎉"
     echo "=============================================================="
     echo "客户端配置文件: /etc/wireguard/${client_name}.conf"
     qrencode -t ansiutf8 < "/etc/wireguard/${client_name}.conf"
@@ -552,13 +398,24 @@ add_new_client() {
     
     if systemctl -q is-active udp2raw; then
         # 提醒用户 udp2raw 正在运行，并显示连接信息
-        echo "提醒: 您的服务正在使用 udp2raw，新客户端也需要按以下信息配置。"
+        echo "提醒: 您的服务正在使用 udp2raw，新客户端也需要配置。"
+        
+        # 从 systemd 服务文件中提取信息
+        local server_ip
+        local tcp_port
+        local udp2raw_password
+        
+        server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
+        
+        if [ -f /etc/systemd/system/udp2raw.service ]; then
+            tcp_port=$(grep -oP 'ExecStart=.*-l 0\.0\.0\.0:\K[0-9]+' /etc/systemd/system/udp2raw.service)
+            udp2raw_password=$(grep -oP 'ExecStart=.*-k "\K[^"]+' /etc/systemd/system/udp2raw.service)
+        fi
 
-        # 直接从变量显示信息
-        if [ -n "$TCP_PORT" ] && [ -n "$UDP2RAW_PASSWORD" ]; then
-            display_udp2raw_info "$SERVER_IPV4" "$SERVER_IPV6" "$TCP_PORT" "$UDP2RAW_PASSWORD"
+        if [ -n "$server_ip" ] && [ -n "$tcp_port" ] && [ -n "$udp2raw_password" ]; then
+            display_udp2raw_info "$server_ip" "$tcp_port" "$udp2raw_password"
         else
-            echo "警告: 无法从 /etc/wireguard/params 中自动提取 udp2raw 配置信息。"
+            echo "警告: 无法从 /etc/systemd/system/udp2raw.service 中自动提取 udp2raw 配置信息。"
             echo "请手动检查您的 udp2raw 客户端配置。"
         fi
     fi
@@ -605,25 +462,75 @@ delete_client() {
     echo "正在删除客户端: $client_name (公钥: $client_pub_key)"
 
     # 1. 从实时接口中移除 peer
-    if ! wg set wg0 peer "$client_pub_key" remove; then
+    wg set wg0 peer "$client_pub_key" remove
+    if [ $? -ne 0 ]; then
         echo "警告: 从实时接口移除 peer 失败。可能该 peer 已不存在于活动会话中。"
     fi
 
     # 2. 从 wg0.conf 中移除 peer 配置块
     cp /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.bak
     # 使用 awk 以段落模式（由空行分隔）来安全地删除整个 peer 块
-    # 这种方法兼容性更好，可以避免 mawk 等 awk 实现中的 for 循环解析问题
     awk -v key_to_remove="$client_pub_key" '
-        BEGIN { RS = ""; ORS = "\n\n" }
-        # 如果当前记录(一个 Peer 块)不包含要移除的公钥则打印它
-        (! /PublicKey = / && ! /AllowedIPs = /) || $0 !~ "PublicKey = " key_to_remove
+        BEGIN { RS = ""; FS = "\n" }
+        {
+            is_target = 0
+            for (i=1; i<=NF; i++) {
+                if ($i ~ "PublicKey = " key_to_remove) {
+                    is_target = 1
+                    break
+                }
+            }
+            if (!is_target) {
+                # 打印非目标的块，并保留其后的记录分隔符（空行）
+                print $0 (RT ? RT : "")
+            }
+        }
     ' /etc/wireguard/wg0.conf.bak > /etc/wireguard/wg0.conf
 
     # 3. 删除客户端的配置文件
     rm -f "/etc/wireguard/${client_name}.conf"
 
-    echo -e "\\n=============================================================="
-    echo "🎉 客户端 ${client_name} 已成功删除。"
+    echo -e "\n=============================================================="
+    echo "🎉 客户端 '$client_name' 已成功删除。"
+    echo "=============================================================="
+}
+
+# 优化系统
+optimize_system() {
+    echo "此操作将尝试升级系统内核并开启 BBR 拥塞控制算法。"
+    read -r -p "这需要重启服务器才能生效。是否继续? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[yY]([eE][sS])?$ ]]; then
+        echo "操作已取消。"
+        exit 0
+    fi
+
+    echo "正在安装 ca-certificates..."
+    apt-get update
+    apt-get install -y ca-certificates
+
+    # 添加 backports 源
+    DEBIAN_VERSION=$(lsb_release -cs)
+    if ! grep -q "$DEBIAN_VERSION-backports" /etc/apt/sources.list /etc/apt/sources.list.d/*; then
+        echo "deb http://deb.debian.org/debian $DEBIAN_VERSION-backports main" > /etc/apt/sources.list.d/backports.list
+        echo "正在更新软件包列表以包含 backports..."
+        apt-get update
+    fi
+
+    echo "正在从 backports 安装最新的 Linux 内核..."
+    apt-get -t "$DEBIAN_VERSION-backports" install -y linux-image-amd64 linux-headers-amd64
+
+    echo "正在配置 BBR..."
+    if ! grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf; then
+        echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+    fi
+    if ! grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf; then
+        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+    fi
+
+    echo -e "\n=============================================================="
+    echo "🎉 系统优化配置完成! 🎉"
+    echo "内核已升级，BBR 已配置。"
+    echo -e "\033[1;31m请务必重启服务器 (reboot) 以应用新的内核和设置。\033[0m"
     echo "=============================================================="
 }
 
@@ -631,6 +538,7 @@ delete_client() {
 # --- 菜单和主逻辑 ---
 start_menu() {
 	clear
+    initial_check
 	echo "=================================================="
 	echo " 适用于 Debian 的 WireGuard 一键安装脚本"
 	echo " (集成 Udp2raw 伪装功能)"
@@ -639,15 +547,17 @@ start_menu() {
 	echo "2. 卸载 WireGuard"
 	echo "3. 添加新用户"
 	echo "4. 删除用户"
-	echo "5. 退出脚本"
+	echo "5. 优化系统 (升级内核并开启 BBR)"
+	echo "6. 退出脚本"
 	echo
-	read -r -p "请输入数字 [1-5]: " num
+	read -r -p "请输入数字 [1-6]: " num
 	case "$num" in
 	1) wireguard_install ;;
 	2) wireguard_uninstall ;;
 	3) add_new_client ;;
 	4) delete_client ;;
-	5) exit 0 ;;
+    5) optimize_system ;;
+	6) exit 0 ;;
 	*)
 		echo "错误: 请输入正确的数字"
 		sleep 2
