@@ -272,10 +272,10 @@ wireguard_install() {
 	ufw --force enable
 
 	# 智能获取主网络接口，兼容 IPv4/IPv6-only 环境
-	net_interface=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $5}')
+	net_interface=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}')
 	if [ -z "$net_interface" ]; then
 		# 如果 IPv4 失败，则尝试 IPv6
-		net_interface=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{print $5}')
+		net_interface=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}')
 	fi
 
 	echo "检测到主网络接口为: $net_interface"
