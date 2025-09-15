@@ -265,14 +265,23 @@ wireguard_install(){
     fi
 	echo "检测到主网络接口为: $net_interface"
 
+    # 为 IPv4 和 IPv6 分别设置 NAT 规则
     UFW_BEFORE_RULES="/etc/ufw/before.rules"
+    UFW_BEFORE6_RULES="/etc/ufw/before6.rules"
+
     if ! grep -q "# BEGIN WIREGUARD NAT" "$UFW_BEFORE_RULES"; then
         cp "$UFW_BEFORE_RULES" "${UFW_BEFORE_RULES}.bak"
-        ( echo ""; echo "# BEGIN WIREGUARD NAT"; echo "*nat"; echo ":POSTROUTING ACCEPT [0:0]"; 
-          echo "-A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE"; 
-          echo "-A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface -j MASQUERADE"; 
-          echo "COMMIT"; echo "# END WIREGUARD NAT" ) | tee -a "$UFW_BEFORE_RULES" > /dev/null
+        ( echo ""; echo "# BEGIN WIREGUARD NAT"; echo "*nat"; echo ":POSTROUTING ACCEPT [0:0]";
+          echo "-A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE";
+          echo "COMMIT"; echo "# END WIREGUARD NAT" ) >> "$UFW_BEFORE_RULES"
         grep -q "# END WIREGUARD NAT" "$UFW_BEFORE_RULES" || error_exit "向 $UFW_BEFORE_RULES 写入 NAT 规则失败。" $LINENO
+    fi
+
+    if [ -n "$public_ipv6" ] && ! grep -q "# BEGIN WIREGUARD NAT" "$UFW_BEFORE6_RULES"; then
+        ( echo ""; echo "# BEGIN WIREGUARD NAT"; echo "*nat"; echo ":POSTROUTING ACCEPT [0:0]";
+          echo "-A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface -j MASQUERADE";
+          echo "COMMIT"; echo "# END WIREGUARD NAT" ) >> "$UFW_BEFORE6_RULES"
+        grep -q "# END WIREGUARD NAT" "$UFW_BEFORE6_RULES" || error_exit "向 $UFW_BEFORE6_RULES 写入 NAT 规则失败。" $LINENO
     fi
 
     sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
