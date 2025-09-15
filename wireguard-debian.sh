@@ -35,6 +35,38 @@ rand_port() {
 	echo $((RANDOM % (max - min) + min))
 }
 
+# 显示 Udp2raw 客户端配置信息
+display_udp2raw_info() {
+    local server_ip=$1
+    local tcp_port=$2
+    local udp2raw_password=$3
+
+    echo -e "\n=================== 客户端 Udp2raw 设置 ==================="
+    echo "伪装模式已启用，您需要在客户端上运行 udp2raw。"
+    echo "请从 https://github.com/wangyu-/udp2raw/releases 下载 udp2raw 二进制文件。"
+    echo "解压后，根据您的操作系统，在终端或命令行中运行对应命令："
+    echo ""
+    echo "服务器 TCP 端口: $tcp_port"
+    echo "连接密码: $udp2raw_password"
+    echo ""
+    echo -e "\033[1;32m--- Linux 客户端 ---\033[0m"
+    echo "(根据您的架构选择 udp2raw_amd64, udp2raw_arm 等)"
+    echo "./udp2raw_amd64 -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
+    echo ""
+    echo -e "\033[1;32m--- macOS 客户端 ---\033[0m"
+    echo "(M1/M2/M3 芯片请用 udp2raw_mp_mac_m1)"
+    echo "./udp2raw_mp_mac -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor"
+    echo ""
+    echo -e "\033[1;32m--- Windows 客户端 (在 CMD 或 PowerShell 中运行) ---\033[0m"
+    echo "(推荐使用 udp2raw_mp.exe)"
+    echo "udp2raw_mp.exe -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
+    echo ""
+    echo "--------------------------------------------------------------"
+    echo "然后再启动 WireGuard 客户端。"
+    echo "=============================================================="
+}
+
+
 # --- 主要功能函数 ---
 
 # 安装 WireGuard
@@ -90,7 +122,7 @@ wireguard_install() {
         read -r -p "请输入 udp2raw 的 TCP 端口 [默认: 39001]: " tcp_port
         tcp_port=${tcp_port:-39001}
         wg_port=$(rand_port) # 内部 WG 端口保持随机
-        client_mtu=1200 # udp2raw 需要更小的 MTU
+        client_mtu=1280 # udp2raw 需要更小的 MTU
         udp2raw_password=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
         
         echo "开放 udp2raw 的 TCP 端口: $tcp_port"
@@ -233,29 +265,7 @@ wireguard_install() {
 	echo "=============================================================="
 
     if [ "$use_udp2raw" == "y" ]; then
-        echo -e "\n=================== 客户端 Udp2raw 设置 ==================="
-        echo "伪装模式已启用，您需要在客户端上运行 udp2raw。"
-        echo "请从 https://github.com/wangyu-/udp2raw/releases 下载 udp2raw 二进制文件。"
-        echo "解压后，根据您的操作系统，在终端或命令行中运行对应命令："
-        echo ""
-        echo "服务器 TCP 端口: $tcp_port"
-        echo "连接密码: $udp2raw_password"
-        echo ""
-        echo -e "\033[1;32m--- Linux 客户端 ---\033[0m"
-        echo "(根据您的架构选择 udp2raw_amd64, udp2raw_arm 等)"
-        echo "./udp2raw_amd64 -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
-        echo ""
-        echo -e "\033[1;32m--- macOS 客户端 ---\033[0m"
-        echo "(M1/M2/M3 芯片请用 udp2raw_mp_mac_m1)"
-        echo "./udp2raw_mp_mac -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor"
-        echo ""
-        echo -e "\033[1;32m--- Windows 客户端 (在 CMD 或 PowerShell 中运行) ---\033[0m"
-        echo "(推荐使用 udp2raw_mp.exe)"
-        echo "./udp2raw_mp.exe -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
-        echo ""
-        echo "--------------------------------------------------------------"
-        echo "然后再启动 WireGuard 客户端。"
-        echo "=============================================================="
+        display_udp2raw_info "$server_ip" "$tcp_port" "$udp2raw_password"
     fi
 }
 
@@ -325,7 +335,7 @@ add_new_client() {
     local client_mtu
     if systemctl -q is-active udp2raw; then
         client_endpoint="127.0.0.1:29999"
-        client_mtu=1200
+        client_mtu=1280
     else
         server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
         server_port=$(grep -oP 'ListenPort = \K[0-9]+' /etc/wireguard/wg0.conf)
@@ -356,7 +366,27 @@ add_new_client() {
     echo "=============================================================="
     
     if systemctl -q is-active udp2raw; then
-        echo "提醒: 您的服务正在使用 udp2raw，请确保客户端也正确配置。"
+        # 提醒用户 udp2raw 正在运行，并显示连接信息
+        echo "提醒: 您的服务正在使用 udp2raw，新客户端也需要配置。"
+        
+        # 从 systemd 服务文件中提取信息
+        local server_ip
+        local tcp_port
+        local udp2raw_password
+        
+        server_ip=$(curl -s -4 icanhazip.com || curl -s -6 icanhazip.com)
+        
+        if [ -f /etc/systemd/system/udp2raw.service ]; then
+            tcp_port=$(grep -oP 'ExecStart=.*-l 0\.0\.0\.0:\K[0-9]+' /etc/systemd/system/udp2raw.service)
+            udp2raw_password=$(grep -oP 'ExecStart=.*-k "\K[^"]+' /etc/systemd/system/udp2raw.service)
+        fi
+
+        if [ -n "$server_ip" ] && [ -n "$tcp_port" ] && [ -n "$udp2raw_password" ]; then
+            display_udp2raw_info "$server_ip" "$tcp_port" "$udp2raw_password"
+        else
+            echo "警告: 无法从 /etc/systemd/system/udp2raw.service 中自动提取 udp2raw 配置信息。"
+            echo "请手动检查您的 udp2raw 客户端配置。"
+        fi
     fi
 }
 
