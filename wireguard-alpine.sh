@@ -114,9 +114,9 @@ wireguard_install(){
 	echo "正在更新软件包列表..."
 	apk update
 	echo "正在安装 WireGuard 及相关工具..."
-	apk add wireguard-tools curl iptables
+	apk add --no-cache wireguard-tools curl iptables
     echo "正在尝试安装 libqrencode (用于生成二维码)..."
-    apk add libqrencode &>/dev/null
+    apk add --no-cache libqrencode &>/dev/null
 
 	echo "正在创建 WireGuard 目录和密钥..."
 	mkdir -p /etc/wireguard && chmod 700 /etc/wireguard
@@ -251,12 +251,22 @@ EOF
 	EOF
     chmod 600 /etc/wireguard/*.conf
 
-	echo "启动 WireGuard 服务..."
+	echo "启动并设置 WireGuard 服务开机自启..."
 	wg-quick down wg0 &>/dev/null || true
 	wg-quick up wg0
-    # 为 OpenRC 创建服务链接并启用
-    ln -s /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
-	rc-update add wg-quick.wg0 default
+    
+    # 确保 OpenRC 服务脚本存在且可执行
+    if [ -f /etc/init.d/wg-quick ]; then
+        chmod +x /etc/init.d/wg-quick
+        # 强制创建服务链接
+        ln -sf /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
+        # 短暂延时，等待 OpenRC 识别新服务
+        sleep 1.5
+        # 添加到开机启动
+        rc-update add wg-quick.wg0 default
+    else
+        error_exit "OpenRC script /etc/init.d/wg-quick not found." $LINENO
+    fi
 
 	echo -e "\n🎉 WireGuard 安装完成! 🎉"
 	if command -v qrencode &> /dev/null; then
