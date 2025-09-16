@@ -53,6 +53,36 @@ get_public_ip() {
     fi
 }
 
+# 初始系统状态检查
+initial_check() {
+    kernel_version=$(uname -r)
+    bbr_status=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "未知")
+
+    echo "==================== 系统状态检查 ===================="
+    echo "当前内核版本: $kernel_version"
+    if [[ "$kernel_version" =~ ^[5-9]\. || "$kernel_version" =~ ^[1-9][0-9]+\. ]]; then
+        echo -e "状态: \033[0;32m良好 (推荐内核)\033[0m"
+    else
+        echo -e "状态: \033[0;33m过旧 (建议升级内核以获得最佳性能)\033[0m"
+    fi
+
+    echo "TCP 拥塞控制算法: $bbr_status"
+    if [ "$bbr_status" = "bbr" ]; then
+        echo -e "状态: \033[0;32mBBR 已开启\033[0m"
+    else
+        echo -e "状态: \033[0;33mBBR 未开启 (建议开启以优化网络)\033[0m"
+    fi
+    
+    echo -e "\n硬盘空间:"
+    df -h /
+    
+    echo -e "\n内存使用:"
+    free -h
+
+    echo "======================================================="
+    echo
+}
+
 # 显示 Udp2raw 客户端配置信息
 display_udp2raw_info() {
     local server_ip=$1
@@ -91,7 +121,7 @@ wireguard_install(){
 	echo "正在更新软件包列表..."
 	apk update
 	echo "正在安装 WireGuard 及相关工具..."
-	apk add wireguard-tools-openrc curl iptables
+	apk add wireguard-tools curl iptables
     echo "正在尝试安装 libqrencode (用于生成二维码)..."
     apk add libqrencode &>/dev/null
 
@@ -228,12 +258,13 @@ EOF
 	EOF
     chmod 600 /etc/wireguard/*.conf
 
-	echo "启动并设置 WireGuard 服务开机自启..."
+	echo "启动 WireGuard 服务..."
 	wg-quick down wg0 &>/dev/null || true
 	wg-quick up wg0
-    # 为 wg0 接口创建 OpenRC 服务链接
+
+    echo "正在创建并启用 WireGuard 开机自启服务..."
     ln -s /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
-	rc-update add wg-quick.wg0 default
+    rc-update add wg-quick.wg0 default
 
 	echo -e "\n🎉 WireGuard 安装完成! 🎉"
 	if command -v qrencode &> /dev/null; then
@@ -250,13 +281,14 @@ EOF
 # 卸载 WireGuard
 wireguard_uninstall() {
     set +e
+    echo "正在停止并禁用 WireGuard 和 udp2raw 服务..."
 	rc-service wg-quick.wg0 stop &>/dev/null
 	rc-update del wg-quick.wg0 default &>/dev/null
     rm -f /etc/init.d/wg-quick.wg0
     rc-service udp2raw stop &>/dev/null
     rc-update del udp2raw default &>/dev/null
     set -e
-	apk del wireguard-tools-openrc curl iptables libqrencode &>/dev/null || apk del wireguard-tools-openrc curl iptables
+	apk del wireguard-tools curl iptables libqrencode &>/dev/null || apk del wireguard-tools curl iptables
 	rm -rf /etc/wireguard /etc/init.d/udp2raw /usr/local/bin/udp2raw
 	echo "🎉 WireGuard 及 Udp2raw 已成功卸载。"
 }
@@ -414,6 +446,7 @@ optimize_system() {
 # --- 菜单和主逻辑 ---
 start_menu(){
 	clear
+    initial_check
 	echo "=================================================="
 	echo " 适用于 Alpine Linux 的 WireGuard 一键安装脚本"
 	echo "=================================================="
