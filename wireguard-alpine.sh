@@ -346,7 +346,7 @@ wireguard_uninstall() {
     rc-update del udp2raw default &>/dev/null
     set -e
 	apk del wireguard-tools curl iptables libqrencode &>/dev/null || apk del wireguard-tools curl iptables
-	rm -rf /etc/wireguard /etc/init.d/udp2raw /usr/local/bin/udp2raw /etc/init.d/wg-quick.wg0
+	rm -rf /etc/wireguard /etc/init.d/udp2raw /usr/local/bin/udp2raw /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
 	echo "🎉 WireGuard 及 Udp2raw 已成功卸载。"
 }
 
