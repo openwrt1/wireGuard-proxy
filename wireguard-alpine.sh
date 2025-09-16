@@ -115,15 +115,10 @@ wireguard_install(){
 	apk update
 	echo "正在安装 WireGuard 及相关工具..."
 	apk add --no-cache wireguard-tools curl iptables
-
-    # --- 调试代码开始 ---
-    echo -e "\n\033[1;33m--- 调试信息开始 ---\033[0m"
-    echo "[调试] 检查 /etc/init.d/ 目录内容:"
-    ls -l /etc/init.d/
-    echo "[调试] 检查 wireguard-tools 软件包安装的文件列表:"
+    
+    echo "--- DEBUG: wireguard-tools 包文件列表 ---"
     apk info -L wireguard-tools
-    echo -e "\033[1;33m--- 调试信息结束 ---\033[0m\n"
-    # --- 调试代码结束 ---
+    echo "--- DEBUG: 列表结束 ---"
 
     echo "正在尝试安装 libqrencode (用于生成二维码)..."
     apk add --no-cache libqrencode &>/dev/null
@@ -262,67 +257,23 @@ EOF
     chmod 600 /etc/wireguard/*.conf
 
 	echo "启动并设置 WireGuard 服务开机自启..."
-    # Alpine 的 wireguard-tools 包不再创建 init.d 脚本。
-    # 我们手动创建一个来包装 wg-quick 命令。
-    if [ ! -f /etc/init.d/wg-quick ]; then
-        echo "正在创建 /etc/init.d/wg-quick OpenRC 服务脚本..."
-        cat > /etc/init.d/wg-quick <<-EOF
-#!/sbin/openrc-run
-
-description="WireGuard quick interface manager"
-
-depend() {
-    need net
-    after firewall
-}
-
-start() {
-    local interface="\${RC_SVCNAME#*.}"
-    ebegin "Starting WireGuard interface \$interface"
-    # wg-quick up 可能会成功创建接口但以非0码退出，我们不依赖它的退出码
-    /usr/bin/wg-quick up "\$interface" >/dev/null 2>&1
-    # 检查接口是否真的存在来判断成功与否
-    ip link show "\$interface" >/dev/null 2>&1
-    eend \$? "Failed to bring up interface \$interface"
-}
-
-stop() {
-    local interface="\${RC_SVCNAME#*.}"
-    ebegin "Stopping WireGuard interface \$interface"
-    # 同样，不完全依赖退出码，只要接口消失即可
-    /usr/bin/wg-quick down "\$interface" >/dev/null 2>&1
-    # 检查接口是否已消失
-    ! ip link show "\$interface" >/dev/null 2>&1
-    eend \$? "Failed to bring down interface \$interface"
-}
-EOF
-        # 强制同步到磁盘并等待，确保文件写入完成
-        sync
-        sleep 1
-    fi
-
     # 确保 OpenRC 服务脚本存在且可执行
     if [ -f /etc/init.d/wg-quick ]; then
         chmod +x /etc/init.d/wg-quick
-
-        # 为 wg0 接口创建专用的服务链接，这是 OpenRC 的标准做法
-        if [ ! -L /etc/init.d/wg-quick.wg0 ]; then
-            ln -s /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
-        fi
+        # 强制创建服务链接
+        ln -sf /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
         
-        # 确保 OpenRC 识别新服务
+        # 强制 OpenRC 更新服务依赖缓存
         rc-update -u
 
         # 使用 OpenRC 标准方式管理服务
-        echo "正在启动 WireGuard 服务 (wg-quick.wg0)..."
-        # 先尝试停止，忽略可能出现的“服务未运行”的错误
-        rc-service wg-quick.wg0 stop >/dev/null 2>&1 || true
+        rc-service wg-quick.wg0 stop &>/dev/null || true
         rc-service wg-quick.wg0 start
 
         # 添加到开机启动
         rc-update add wg-quick.wg0 default
     else
-        error_exit "创建 /etc/init.d/wg-quick 失败，请检查文件系统权限或磁盘空间。" $LINENO
+        error_exit "OpenRC script /etc/init.d/wg-quick not found." $LINENO
     fi
 
 	echo -e "\n🎉 WireGuard 安装完成! 🎉"
@@ -346,7 +297,7 @@ wireguard_uninstall() {
     rc-update del udp2raw default &>/dev/null
     set -e
 	apk del wireguard-tools curl iptables libqrencode &>/dev/null || apk del wireguard-tools curl iptables
-	rm -rf /etc/wireguard /etc/init.d/udp2raw /usr/local/bin/udp2raw /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
+	rm -rf /etc/wireguard /etc/init.d/udp2raw /usr/local/bin/udp2raw /etc/init.d/wg-quick.wg0
 	echo "🎉 WireGuard 及 Udp2raw 已成功卸载。"
 }
 
@@ -534,14 +485,4 @@ start_menu(){
 # --- 脚本入口 ---
 check_root
 check_alpine
-
-# 检查是否提供了命令行参数，以支持自动化调用
-if [ -n "$1" ]; then
-    case "$1" in
-        uninstall) wireguard_uninstall ;;
-        *) error_exit "未知的参数 '$1'。有效参数: 'uninstall'" $LINENO ;;
-    esac
-else
-    # 如果没有参数，则显示交互式菜单
-    start_menu
-fi
+start_menu
