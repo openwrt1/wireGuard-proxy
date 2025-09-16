@@ -333,7 +333,7 @@ wireguard_install(){
 		[Interface]
 		PrivateKey = $c1
 		Address = 10.0.0.2/24, fd86:ea04:1111::2/64
-		DNS = 8.8.8.8, 2001:4860:4860::8888
+		DNS = 1.1.1.1, 1.0.0.1, 2606:4700:4700::1111, 2606:4700:4700::1001
 		MTU = $client_mtu
 		[Peer]
 		PublicKey = $s2
@@ -427,7 +427,7 @@ add_new_client() {
 		[Interface]
 		PrivateKey = $new_client_private_key
 		Address = $new_client_ip/24, $new_client_ipv6/64
-		DNS = 8.8.8.8, 2001:4860:4860::8888
+		DNS = 1.1.1.1, 1.0.0.1, 2606:4700:4700::1111, 2606:4700:4700::1001
 		MTU = $client_mtu
 		[Peer]
 		PublicKey = $server_public_key
