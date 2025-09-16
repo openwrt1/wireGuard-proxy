@@ -149,8 +149,12 @@ wireguard_install(){
 	echo "正在更新软件包列表..."
 	apk update
 	echo "正在安装 WireGuard 及相关工具..."
-	apk add --no-cache wireguard-tools curl iptables bash
-    apk add --no-cache ip6tables &>/dev/null || echo "ip6tables 可能不可用，将跳过 IPv6 防火墙规则。"
+	# Alpine v3.15+ 默认使用 nftables, wg-quick 的 PostUp 规则可能不兼容
+    # 显式安装 iptables-legacy 并设置其为默认，以保证兼容性
+	apk add --no-cache wireguard-tools curl iptables-legacy ip6tables-legacy bash
+    update-alternatives --set iptables /usr/sbin/iptables-legacy
+    update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
+
     echo "正在尝试安装 libqrencode (用于生成二维码)..."
     apk add --no-cache libqrencode &>/dev/null
 
@@ -415,6 +419,8 @@ wireguard_uninstall() {
     rc-update del udp2raw-ipv6 default &>/dev/null
     set -e
 	apk del wireguard-tools curl iptables ip6tables libqrencode bash &>/dev/null || apk del wireguard-tools curl iptables bash
+    # 尝试卸载 legacy 包
+    apk del iptables-legacy ip6tables-legacy &>/dev/null || true
 	rm -rf /etc/wireguard /etc/init.d/udp2raw-ipv4 /etc/init.d/udp2raw-ipv6 /usr/local/bin/udp2raw-ipv4 /usr/local/bin/udp2raw-ipv6 /etc/init.d/wireguard-autostart
 	echo "🎉 WireGuard 及 Udp2raw 已成功卸载。"
 }
