@@ -220,8 +220,11 @@ wireguard_install() {
             i386 | i686) UDP2RAW_BINARY="udp2raw_x86" ;;
             *) error_exit "不支持的系统架构 '$ARCH'。" $LINENO ;;
         esac
-        mv "$UDP2RAW_BINARY" /usr/local/bin/udp2raw
-        chmod +x /usr/local/bin/udp2raw
+        echo "正在复制 udp2raw 二进制文件..."
+        cp "$UDP2RAW_BINARY" /usr/local/bin/udp2raw-ipv4
+        cp "$UDP2RAW_BINARY" /usr/local/bin/udp2raw-ipv6
+        chmod +x /usr/local/bin/udp2raw-ipv4
+        chmod +x /usr/local/bin/udp2raw-ipv6
         rm -f udp2raw_* version.txt udp2raw_binaries.tar.gz
 
         if [ -n "$public_ipv4" ]; then
@@ -232,7 +235,7 @@ wireguard_install() {
 				After=network.target
 				[Service]
 				Type=simple
-				ExecStart=/usr/local/bin/udp2raw -s -l $public_ipv4:$tcp_port -r 127.0.0.1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor
+				ExecStart=/usr/local/bin/udp2raw-ipv4 -s -l $public_ipv4:$tcp_port -r 127.0.0.1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor
 				Restart=on-failure
 				[Install]
 				WantedBy=multi-user.target
@@ -250,7 +253,7 @@ wireguard_install() {
 				After=network.target
 				[Service]
 				Type=simple
-				ExecStart=/usr/local/bin/udp2raw -s -l [$public_ipv6]:$tcp_port -r ::1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor
+				ExecStart=/usr/local/bin/udp2raw-ipv6 -s -l [$public_ipv6]:$tcp_port -r ::1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor
 				Restart=on-failure
 				[Install]
 				WantedBy=multi-user.target
@@ -348,6 +351,9 @@ wireguard_install() {
 
 	echo -e "\n🎉 WireGuard 安装完成! 🎉"
 	qrencode -t ansiutf8 < /etc/wireguard/client.conf
+    echo -e "\n--- 初始客户端配置 (client.conf) ---\n"
+    cat /etc/wireguard/client.conf
+    echo -e "\n---------------------------------------\n"
 
     if [ "$USE_UDP2RAW" == "y" ]; then
         display_udp2raw_info "$public_ipv4" "$public_ipv6" "$tcp_port" "$udp2raw_password"
@@ -363,7 +369,7 @@ wireguard_uninstall() {
     systemctl stop udp2raw-ipv6 && systemctl disable udp2raw-ipv6
     set -e
 	apt-get remove --purge -y wireguard wireguard-tools qrencode
-	rm -rf /etc/wireguard /usr/local/bin/udp2raw /etc/systemd/system/udp2raw-ipv4.service /etc/systemd/system/udp2raw-ipv6.service
+	rm -rf /etc/wireguard /usr/local/bin/udp2raw-* /etc/systemd/system/udp2raw-ipv4.service /etc/systemd/system/udp2raw-ipv6.service
     systemctl daemon-reload
 	echo "🎉 WireGuard 及 Udp2raw 已成功卸载。"
 }
@@ -432,6 +438,9 @@ add_new_client() {
 
     echo -e "\n🎉 新客户端 '$client_name' 添加成功!"
     qrencode -t ansiutf8 < "/etc/wireguard/${client_name}.conf"
+    echo -e "\n--- 客户端配置 (${client_name}.conf) ---\n"
+    cat "/etc/wireguard/${client_name}.conf"
+    echo -e "\n---------------------------------------\n"
     
     if [ "$USE_UDP2RAW" = "true" ]; then
         echo "提醒: 您的服务正使用 udp2raw，新客户端也需按以下信息配置。"
