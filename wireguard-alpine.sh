@@ -374,17 +374,19 @@ EOF
     fi
 
     # 3. 手动创建 OpenRC 自启服务
+    # 创建一个更符合 OpenRC 规范的服务，它不依赖于常驻进程，
+    # 而是通过 start-stop-daemon 管理一个虚拟的 pidfile 来跟踪状态。
     cat > /etc/init.d/wireguard-autostart <<-EOF
 #!/sbin/openrc-run
 description="Starts WireGuard wg0 interface on boot"
-depend() {
-    need net
-}
+
+pidfile="/var/run/wireguard-autostart.pid"
+
 start() {
-    /usr/bin/wg-quick up wg0
+    /usr/bin/wg-quick up wg0 && start-stop-daemon --start --make-pidfile --pidfile "\$pidfile" --background --exec /bin/true
 }
 stop() {
-    /usr/bin/wg-quick down wg0
+    /usr/bin/wg-quick down wg0 && start-stop-daemon --stop --pidfile "\$pidfile"
 }
 EOF
     chmod +x /etc/init.d/wireguard-autostart
