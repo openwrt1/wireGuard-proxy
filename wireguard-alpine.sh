@@ -262,6 +262,25 @@ EOF
     chmod 600 /etc/wireguard/*.conf
 
 	echo "启动并设置 WireGuard 服务开机自启..."
+    # Alpine 的 wireguard-tools 包不再创建 init.d 脚本。
+    # 我们手动创建一个来包装 wg-quick 命令。
+    if [ ! -f /etc/init.d/wg-quick ]; then
+        echo "正在创建 /etc/init.d/wg-quick OpenRC 服务脚本..."
+        cat > /etc/init.d/wg-quick <<-EOF
+#!/sbin/openrc-run
+
+description="WireGuard quick interface manager"
+
+command="/usr/bin/wg-quick"
+command_args="\$1 \$RC_SVCNAME"
+
+depend() {
+    need net
+    after firewall
+}
+EOF
+    fi
+
     # 确保 OpenRC 服务脚本存在且可执行
     if [ -f /etc/init.d/wg-quick ]; then
         chmod +x /etc/init.d/wg-quick
