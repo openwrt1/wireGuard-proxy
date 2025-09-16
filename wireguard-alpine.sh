@@ -101,13 +101,13 @@ display_udp2raw_info() {
 
     if [ -n "$tcp_port_v4" ]; then
         printf "\\033[1;32m--- IPv4 连接命令 (服务器端口: %s) ---\\033[0m\\n" "$tcp_port_v4"
-        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r $server_ipv4:$tcp_port_v4 -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
+        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r $server_ipv4:$tcp_port_v4 -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor"
         echo ""
     fi
 
     if [ -n "$tcp_port_v6" ]; then
         printf "\\033[1;32m--- IPv6 连接命令 (服务器端口: %s) ---\\033[0m\\n" "$tcp_port_v6"
-        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r [$server_ipv6]:$tcp_port_v6 -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
+        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r [$server_ipv6]:$tcp_port_v6 -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor"
         echo ""
     fi
 
@@ -313,13 +313,13 @@ EOF
 
     server_address=""; client_address=""; client_dns=""; peer_allowed_ips=""
     if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
-        server_address="10.0.0.1/24"; client_address="10.0.0.2/24"; peer_allowed_ips="10.0.0.2/32"; client_dns="8.8.8.8"
+        server_address="10.0.0.1/24"; client_address="10.0.0.2/24"; peer_allowed_ips="10.0.0.2/32"; client_dns="1.1.1.1"
     fi
     if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
         server_address=${server_address:+"$server_address, "}fd86:ea04:1111::1/64
         client_address=${client_address:+"$client_address, "}fd86:ea04:1111::2/64
         peer_allowed_ips=${peer_allowed_ips:+"$peer_allowed_ips, "}fd86:ea04:1111::2/128
-        client_dns=${client_dns:+"$client_dns, "}2001:4860:4860::8888
+        client_dns=${client_dns:+"$client_dns, "}2606:4700:4700::1111
     fi
 
     # 针对单栈模式优化客户端 AllowedIPs
@@ -487,9 +487,9 @@ add_new_client() {
     fi
 
     local client_allowed_ips="0.0.0.0/0, ::/0" # 默认全局隧道
-    if [ "$IP_MODE" = "ipv4" ] || [ "$IP_MODE" = "dual" ]; then client_dns="8.8.8.8"; fi
+    if [ "$IP_MODE" = "ipv4" ] || [ "$IP_MODE" = "dual" ]; then client_dns="1.1.1.1"; fi
     if [ "$IP_MODE" = "ipv6" ] || [ "$IP_MODE" = "dual" ]; then
-        client_dns=${client_dns:+"$client_dns, "}2001:4860:4860::8888
+        client_dns=${client_dns:+"$client_dns, "}2606:4700:4700::1111
     fi
 
     # 针对单栈模式优化客户端配置
