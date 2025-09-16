@@ -351,13 +351,14 @@ wireguard_install(){
 
 	echo -e "\n🎉 WireGuard 安装完成! 🎉"
 	qrencode -t ansiutf8 < /etc/wireguard/client.conf
-    echo -e "\n--- 初始客户端配置 (client.conf) ---\n"
-    cat /etc/wireguard/client.conf
-    echo -e "\n---------------------------------------\n"
 
     if [ "$USE_UDP2RAW" == "y" ]; then
         display_udp2raw_info "$public_ipv4" "$public_ipv6" "$tcp_port" "$udp2raw_password"
     fi
+
+    echo -e "\n--- 初始客户端配置 (client.conf) ---\n"
+    cat /etc/wireguard/client.conf
+    echo -e "\n---------------------------------------\n"
 }
 
 # 卸载 WireGuard
