@@ -252,16 +252,16 @@ EOF
     chmod 600 /etc/wireguard/*.conf
 
 	echo "启动并设置 WireGuard 服务开机自启..."
-	wg-quick down wg0 &>/dev/null || true
-	wg-quick up wg0
-    
     # 确保 OpenRC 服务脚本存在且可执行
     if [ -f /etc/init.d/wg-quick ]; then
         chmod +x /etc/init.d/wg-quick
         # 强制创建服务链接
         ln -sf /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
-        # 主动查询服务状态，强制 OpenRC 识别新服务
-        rc-service wg-quick.wg0 status &>/dev/null || true
+        
+        # 使用 OpenRC 标准方式管理服务
+        rc-service wg-quick.wg0 stop &>/dev/null || true
+        rc-service wg-quick.wg0 start
+
         # 添加到开机启动
         rc-update add wg-quick.wg0 default
     else
