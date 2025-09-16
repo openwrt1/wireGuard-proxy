@@ -149,12 +149,9 @@ wireguard_install(){
 	echo "正在更新软件包列表..."
 	apk update
 	echo "正在安装 WireGuard 及相关工具..."
-	# Alpine v3.15+ 默认使用 nftables, wg-quick 的 PostUp 规则可能不兼容
-    # 我们将安装 iptables 包来确保兼容性。
-	apk add --no-cache wireguard-tools curl iptables ip6tables bash
-
-    echo "正在安装 libqrencode-tools (用于生成二维码)..."
-    apk add --no-cache libqrencode-tools
+	# Alpine v3.15+ 默认使用 nftables, 但 wg-quick 的 PostUp 规则需要 iptables。
+    # 我们将安装 iptables, libqrencode-tools (二维码) 及其他依赖。
+	apk add --no-cache wireguard-tools curl iptables ip6tables bash libqrencode-tools
 
 	echo "正在创建 WireGuard 目录和密钥..."
 	mkdir -p /etc/wireguard && chmod 700 /etc/wireguard
@@ -216,8 +213,12 @@ wireguard_install(){
             predown_rules="$IPTABLES_PATH -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
         fi
         if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
-            postup_rules="${postup_rules} $IP6TABLES_PATH -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface -j MASQUERADE;"
-            predown_rules="${predown_rules} $IP6TABLES_PATH -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface -j MASQUERADE;"
+            # 对于 IPv6，我们不使用 NAT/MASQUERADE，而是通过 FORWARD 链来允许流量转发。
+            # 允许从 WireGuard 子网出去的流量
+            postup_rules="${postup_rules} $IP6TABLES_PATH -A FORWARD -i wg0 -j ACCEPT;"
+            # 允许已建立连接的流量返回
+            postup_rules="${postup_rules} $IP6TABLES_PATH -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;"
+            predown_rules="${predown_rules} $IP6TABLES_PATH -D FORWARD -i wg0 -j ACCEPT; $IP6TABLES_PATH -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;"
         fi
     fi
 
@@ -420,11 +421,12 @@ wireguard_uninstall() {
     wg-quick down wg0 &>/dev/null || true
     ip link delete wg0 &>/dev/null || true
     set -e
-	# 不再卸载 bash，因为它可能是系统或用户需要的通用组件
-	apk del wireguard-tools curl iptables ip6tables libqrencode-tools &>/dev/null || apk del wireguard-tools curl iptables &>/dev/null || true
+	# 只卸载 WireGuard 和 qrencode 相关的特定包。
+	# 不再卸载 curl, iptables, ip6tables, bash 等通用组件，以避免破坏系统其他部分。
+	apk del wireguard-tools libqrencode-tools &>/dev/null || true
     # 尝试卸载 legacy 包
     apk del iptables-legacy ip6tables-legacy &>/dev/null || true
-	rm -rf /etc/wireguard /etc/init.d/udp2raw-ipv4 /etc/init.d/udp2raw-ipv6 /usr/local/bin/udp2raw-ipv4 /usr/local/bin/udp2raw-ipv6 /etc/init.d/wireguard-autostart
+	rm -rf /etc/wireguard /etc/init.d/udp2raw-ipv4 /etc/init.d/udp2raw-ipv6 /usr/local/bin/udp2raw-* /etc/init.d/wireguard-autostart
 	echo "🎉 WireGuard 及 Udp2raw 已成功卸载。"
 }
 
