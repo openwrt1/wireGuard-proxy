@@ -277,15 +277,23 @@ depend() {
 }
 
 start() {
-    ebegin "Starting WireGuard interface \${RC_SVCNAME#*.}"
-    /usr/bin/wg-quick up "\${RC_SVCNAME#*.}"
-    eend \$?
+    local interface="\${RC_SVCNAME#*.}"
+    ebegin "Starting WireGuard interface \$interface"
+    # wg-quick up 可能会成功创建接口但以非0码退出，我们不依赖它的退出码
+    /usr/bin/wg-quick up "\$interface" >/dev/null 2>&1
+    # 检查接口是否真的存在来判断成功与否
+    ip link show "\$interface" >/dev/null 2>&1
+    eend \$? "Failed to bring up interface \$interface"
 }
 
 stop() {
-    ebegin "Stopping WireGuard interface \${RC_SVCNAME#*.}"
-    /usr/bin/wg-quick down "\${RC_SVCNAME#*.}"
-    eend \$?
+    local interface="\${RC_SVCNAME#*.}"
+    ebegin "Stopping WireGuard interface \$interface"
+    # 同样，不完全依赖退出码，只要接口消失即可
+    /usr/bin/wg-quick down "\$interface" >/dev/null 2>&1
+    # 检查接口是否已消失
+    ! ip link show "\$interface" >/dev/null 2>&1
+    eend \$? "Failed to bring down interface \$interface"
 }
 EOF
         # 强制同步到磁盘并等待，确保文件写入完成
