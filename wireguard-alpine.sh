@@ -270,7 +270,6 @@ EOF
 #!/sbin/openrc-run
 
 description="WireGuard quick interface manager"
-
 command="/usr/bin/wg-quick"
 command_args="\$1 \$RC_SVCNAME"
 
@@ -279,25 +278,33 @@ depend() {
     after firewall
 }
 EOF
+        # 强制同步到磁盘并等待，确保文件写入完成
+        sync
+        sleep 1
     fi
 
     # 确保 OpenRC 服务脚本存在且可执行
     if [ -f /etc/init.d/wg-quick ]; then
         chmod +x /etc/init.d/wg-quick
-        # 强制创建服务链接
-        ln -sf /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
+
+        # 为 wg0 接口创建专用的服务链接，这是 OpenRC 的标准做法
+        if [ ! -L /etc/init.d/wg-quick.wg0 ]; then
+            ln -s /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
+        fi
         
-        # 强制 OpenRC 更新服务依赖缓存
+        # 确保 OpenRC 识别新服务
         rc-update -u
 
         # 使用 OpenRC 标准方式管理服务
-        rc-service wg-quick.wg0 stop &>/dev/null || true
+        echo "正在启动 WireGuard 服务 (wg-quick.wg0)..."
+        # 先尝试停止，忽略可能出现的“服务未运行”的错误
+        rc-service wg-quick.wg0 stop >/dev/null 2>&1 || true
         rc-service wg-quick.wg0 start
 
         # 添加到开机启动
         rc-update add wg-quick.wg0 default
     else
-        error_exit "OpenRC script /etc/init.d/wg-quick not found." $LINENO
+        error_exit "创建 /etc/init.d/wg-quick 失败，请检查文件系统权限或磁盘空间。" $LINENO
     fi
 
 	echo -e "\n🎉 WireGuard 安装完成! 🎉"
