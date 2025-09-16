@@ -197,11 +197,17 @@ wireguard_install(){
     local client_endpoint
     local wg_port=$(rand_port)
     local client_mtu
+    local tcp_port_v4=""
+    local tcp_port_v6=""
+    local udp2raw_password=""
+
     if [ "$use_udp2raw" == "y" ]; then
         client_mtu=1280
         udp2raw_password=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
-        echo "UDP2RAW_PASSWORD=$udp2raw_password" >> "$PARAMS_FILE"
-        echo "USE_UDP2RAW=true" >> "$PARAMS_FILE"
+        {
+            echo "UDP2RAW_PASSWORD=$udp2raw_password"
+            echo "USE_UDP2RAW=true"
+        } >> "$PARAMS_FILE"
 
         # ... (udp2raw 安装逻辑) ...
 
@@ -330,8 +336,7 @@ EOF
 	qrencode -t ansiutf8 < /etc/wireguard/client.conf
 
     if [ "$use_udp2raw" == "y" ]; then
-        source "$PARAMS_FILE"
-        display_udp2raw_info "$SERVER_IPV4" "$SERVER_IPV6" "$TCP_PORT_V4" "$TCP_PORT_V6" "$UDP2RAW_PASSWORD"
+        display_udp2raw_info "$public_ipv4" "$public_ipv6" "$tcp_port_v4" "$tcp_port_v6" "$udp2raw_password"
     fi
 }
 
@@ -353,6 +358,7 @@ add_new_client() {
     if [ ! -f /etc/wireguard/wg0.conf ]; then error_exit "WireGuard 尚未安装。" $LINENO; fi
 
     PARAMS_FILE="/etc/wireguard/params"
+    IP_MODE=""; SERVER_IPV4=""; SERVER_IPV6=""; USE_UDP2RAW=""; WG_PORT=""; TCP_PORT_V4=""; TCP_PORT_V6=""; UDP2RAW_PASSWORD=""
     # shellcheck source=/etc/wireguard/params
     if [ -f "$PARAMS_FILE" ]; then source "$PARAMS_FILE"; else error_exit "params 文件不存在。" $LINENO; fi
 
@@ -438,7 +444,7 @@ delete_client() {
 
     read -r -p "请输入要删除的客户端名称: " client_name
     if [ -z "$client_name" ]; then error_exit "客户端名称不能为空。" $LINENO; fi
-    if [[ ! " ${CLIENTS[*]} " =~ " ${client_name} " ]]; then error_exit "客户端 ${client_name} 不存在。" $LINENO; fi
+    if [[ ! " ${CLIENTS[*]} " == *" ${client_name} "* ]]; then error_exit "客户端 ${client_name} 不存在。" $LINENO; fi
 
     client_pub_key=$(awk -v client="$client_name" '/^# Client: / && $3==client {getline; print $3}' /etc/wireguard/wg0.conf)
     if [ -z "$client_pub_key" ]; then error_exit "无法在 wg0.conf 中找到客户端 ${client_name} 的公钥。" $LINENO; fi
@@ -476,6 +482,8 @@ list_clients() {
 # 显示 Udp2raw 配置
 show_udp2raw_config() {
     if [ ! -f /etc/wireguard/params ]; then error_exit "WireGuard 尚未安装或配置文件不完整。" $LINENO; fi
+    IP_MODE=""; SERVER_IPV4=""; SERVER_IPV6=""; USE_UDP2RAW=""; WG_PORT=""; TCP_PORT_V4=""; TCP_PORT_V6=""; UDP2RAW_PASSWORD=""
+    # shellcheck source=/etc/wireguard/params
     source /etc/wireguard/params
     if [ "$USE_UDP2RAW" = "true" ]; then
         display_udp2raw_info "$SERVER_IPV4" "$SERVER_IPV6" "$TCP_PORT_V4" "$TCP_PORT_V6" "$UDP2RAW_PASSWORD"
