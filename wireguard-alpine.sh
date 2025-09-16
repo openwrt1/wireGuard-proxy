@@ -149,7 +149,7 @@ wireguard_install(){
 	echo "正在更新软件包列表..."
 	apk update
 	echo "正在安装 WireGuard 及相关工具..."
-	apk add --no-cache wireguard-tools curl iptables
+	apk add --no-cache wireguard-tools curl iptables bash
     apk add --no-cache ip6tables &>/dev/null || echo "ip6tables 可能不可用，将跳过 IPv6 防火墙规则。"
     echo "正在尝试安装 libqrencode (用于生成二维码)..."
     apk add --no-cache libqrencode &>/dev/null
@@ -205,14 +205,17 @@ wireguard_install(){
     if [ -z "$net_interface" ]; then error_exit "无法自动检测到有效的主网络接口。" $LINENO; fi
 	echo "检测到主网络接口为: $net_interface"
 
+    IPTABLES_PATH=$(command -v iptables)
+    IP6TABLES_PATH=$(command -v ip6tables)
+
     if [ -n "$net_interface" ]; then
         if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
-            postup_rules="iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
-            predown_rules="iptables -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
+            postup_rules="$IPTABLES_PATH -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
+            predown_rules="$IPTABLES_PATH -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
         fi
         if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
-            postup_rules="${postup_rules} ip6tables -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface -j MASQUERADE;"
-            predown_rules="${predown_rules} ip6tables -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface -j MASQUERADE;"
+            postup_rules="${postup_rules} $IP6TABLES_PATH -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface -j MASQUERADE;"
+            predown_rules="${predown_rules} $IP6TABLES_PATH -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface -j MASQUERADE;"
         fi
     fi
 
@@ -244,8 +247,8 @@ wireguard_install(){
             read -r -p "请输入 udp2raw 的 IPv4 TCP 端口 [默认: 39001]: " tcp_port_v4
             tcp_port_v4=${tcp_port_v4:-39001}
             echo "TCP_PORT_V4=$tcp_port_v4" >> "$PARAMS_FILE"
-            postup_rules="${postup_rules} iptables -A INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT;"
-            predown_rules="${predown_rules} iptables -D INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT;"
+            postup_rules="${postup_rules} $IPTABLES_PATH -A INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT;"
+            predown_rules="${predown_rules} $IPTABLES_PATH -D INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT;"
             cat > /etc/init.d/udp2raw-ipv4 <<-EOF
 #!/sbin/openrc-run
 description="udp2raw-tunnel server (IPv4)"
@@ -267,8 +270,8 @@ EOF
             read -r -p "请输入 udp2raw 的 IPv6 TCP 端口 [默认: 39002]: " tcp_port_v6
             tcp_port_v6=${tcp_port_v6:-39002}
             echo "TCP_PORT_V6=$tcp_port_v6" >> "$PARAMS_FILE"
-            postup_rules="${postup_rules} ip6tables -A INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT;"
-            predown_rules="${predown_rules} ip6tables -D INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT;"
+            postup_rules="${postup_rules} $IP6TABLES_PATH -A INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT;"
+            predown_rules="${predown_rules} $IP6TABLES_PATH -D INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT;"
             cat > /etc/init.d/udp2raw-ipv6 <<-EOF
 #!/sbin/openrc-run
 description="udp2raw-tunnel server (IPv6)"
@@ -295,8 +298,8 @@ EOF
             echo "USE_UDP2RAW=false";
             echo "WG_PORT=$wg_port";
         } >> "$PARAMS_FILE"
-        postup_rules="${postup_rules} iptables -A INPUT -p udp --dport $wg_port -j ACCEPT;"
-        predown_rules="${predown_rules} iptables -D INPUT -p udp --dport $wg_port -j ACCEPT;"
+        postup_rules="${postup_rules} $IPTABLES_PATH -A INPUT -p udp --dport $wg_port -j ACCEPT;"
+        predown_rules="${predown_rules} $IPTABLES_PATH -D INPUT -p udp --dport $wg_port -j ACCEPT;"
         
         if [ "$ip_mode" = "ipv4" ]; then client_endpoint="$public_ipv4:$wg_port"; fi
         if [ "$ip_mode" = "ipv6" ]; then client_endpoint="[$public_ipv6]:$wg_port"; fi
@@ -360,13 +363,26 @@ EOF
         ln -sf /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
         rc-update -u # 更新服务缓存
 
-        rc-service wg-quick.wg0 stop &>/dev/null || true
-        rc-service wg-quick.wg0 start
-        rc-update add wg-quick.wg0 default
+        rc-service wg-quick.wg0 stop &>/dev/null || true # 确保服务已停止
+
+        if ! rc-service wg-quick.wg0 start; then
+            echo -e "\033[1;31m错误: 'rc-service wg-quick.wg0 start' 执行失败。\033[0m"
+            echo "--- 开始详细诊断 ---"
+            echo "1. 检查 wg0.conf 文件内容:"
+            cat /etc/wireguard/wg0.conf
+            echo -e "\n2. 尝试使用 'bash -x' 模式手动启动以获取详细日志:"
+            bash -x /usr/bin/wg-quick up wg0
+            echo "--- 诊断结束 ---"
+            error_exit "WireGuard 服务启动失败，请检查上面的诊断信息。" $LINENO
+        fi
+
+        rc-update add wg-quick.wg0 default # 添加到开机启动
     else
         # 如果标准脚本不存在，则回退到 wg-quick 命令
         wg-quick down wg0 &>/dev/null || true
-        wg-quick up wg0
+        if ! wg-quick up wg0; then
+            error_exit "WireGuard 服务启动失败 (wg-quick up wg0)。" $LINENO
+        fi
     fi
 
 	echo -e "\n🎉 WireGuard 安装完成! 🎉"
@@ -396,7 +412,7 @@ wireguard_uninstall() {
     rc-service udp2raw-ipv6 stop &>/dev/null
     rc-update del udp2raw-ipv6 default &>/dev/null
     set -e
-	apk del wireguard-tools curl iptables ip6tables libqrencode &>/dev/null || apk del wireguard-tools curl iptables
+	apk del wireguard-tools curl iptables ip6tables libqrencode bash &>/dev/null || apk del wireguard-tools curl iptables bash
 	rm -rf /etc/wireguard /etc/init.d/udp2raw-ipv4 /etc/init.d/udp2raw-ipv6 /usr/local/bin/udp2raw-ipv4 /usr/local/bin/udp2raw-ipv6 /etc/init.d/wg-quick.wg0 /etc/init.d/wg-quick
 	echo "🎉 WireGuard 及 Udp2raw 已成功卸载。"
 }
@@ -561,12 +577,11 @@ show_udp2raw_config() {
 # 优化系统 (开启 BBR)
 optimize_system() {
     echo "正在为 Alpine Linux 配置 BBR..."
-    {
-        echo "net.core.default_qdisc=fq"
-        echo "net.ipv4.tcp_congestion_control=bbr"
-    } >> /etc/sysctl.conf
+    if ! grep -q -E "^\s*net.core.default_qdisc\s*=\s*fq" /etc/sysctl.conf; then echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf; fi
+    if ! grep -q -E "^\s*net.ipv4.tcp_congestion_control\s*=\s*bbr" /etc/sysctl.conf; then echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf; fi
     sysctl -p >/dev/null
     echo "🎉 BBR 配置完成! 设置已生效并将在重启后保持。"
+    initial_check # 重新检查并显示当前状态
 }
 
 
