@@ -357,6 +357,7 @@ wireguard_install() {
     fi
 
     echo -e "\n--- 初始客户端配置 (client.conf) ---\n"
+    echo "配置文件路径: /etc/wireguard/client.conf"
     cat /etc/wireguard/client.conf
     echo -e "\n---------------------------------------\n"
 }
@@ -440,6 +441,7 @@ add_new_client() {
     echo -e "\n🎉 新客户端 '$client_name' 添加成功!"
     qrencode -t ansiutf8 < "/etc/wireguard/${client_name}.conf"
     echo -e "\n--- 客户端配置 (${client_name}.conf) ---\n"
+    echo "配置文件路径: /etc/wireguard/${client_name}.conf"
     cat "/etc/wireguard/${client_name}.conf"
     echo -e "\n---------------------------------------\n"
     
