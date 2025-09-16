@@ -449,7 +449,13 @@ add_new_client() {
     chmod 600 "/etc/wireguard/${client_name}.conf"
 
     echo -e "\n🎉 新客户端 '$client_name' 添加成功!"
+    echo "-------------------- 客户端配置 --------------------"
+    echo "配置文件路径: /etc/wireguard/${client_name}.conf"
+    echo "二维码:"
     qrencode -t ansiutf8 < "/etc/wireguard/${client_name}.conf"
+    echo -e "\n配置文件内容:"
+    cat "/etc/wireguard/${client_name}.conf"
+    echo "------------------------------------------------------"
     
     if [ "$USE_UDP2RAW" = "true" ]; then
         echo "提醒: 您的服务正使用 udp2raw，新客户端也需按以下信息配置。"
@@ -498,6 +504,8 @@ list_clients() {
         echo "配置文件路径: /etc/wireguard/${client}.conf"
         echo "二维码:"
         qrencode -t ansiutf8 < "/etc/wireguard/${client}.conf"
+        echo -e "\n配置文件内容:"
+        cat "/etc/wireguard/${client}.conf"
         echo "------------------------------------------------------"
     done
     echo "======================================================="
