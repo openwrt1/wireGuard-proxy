@@ -260,8 +260,8 @@ EOF
         chmod +x /etc/init.d/wg-quick
         # 强制创建服务链接
         ln -sf /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
-        # 短暂延时，等待 OpenRC 识别新服务
-        sleep 1.5
+        # 主动查询服务状态，强制 OpenRC 识别新服务
+        rc-service wg-quick.wg0 status &>/dev/null || true
         # 添加到开机启动
         rc-update add wg-quick.wg0 default
     else
