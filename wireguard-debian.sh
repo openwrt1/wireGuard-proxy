@@ -307,8 +307,14 @@ EOF
     else
         iptables -I INPUT 1 -p udp --dport "$wg_port" -j ACCEPT
     fi
-    if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o "$net_interface" -j MASQUERADE; fi
-    if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then ip6tables -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o "$net_interface" -j MASQUERADE; fi
+    if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
+        iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o "$net_interface" -j MASQUERADE
+        iptables -I FORWARD 1 -i wg0 -j ACCEPT && iptables -I FORWARD 1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+    fi
+    if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
+        ip6tables -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o "$net_interface" -j MASQUERADE
+        ip6tables -I FORWARD 1 -i wg0 -j ACCEPT && ip6tables -I FORWARD 1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+    fi
 
     iptables-save > "$IPTABLES_RULES_FILE"
     ip6tables-save > "$IP6TABLES_RULES_FILE"
@@ -324,6 +330,11 @@ EOF
         peer_allowed_ips=${peer_allowed_ips:+"$peer_allowed_ips, "}fd86:ea04:1111::2/128
         client_dns=${client_dns:+"$client_dns, "}2001:4860:4860::8888
     fi
+
+    # 针对单栈模式优化客户端 AllowedIPs
+    local client_allowed_ips="0.0.0.0/0, ::/0" # 默认全局隧道
+    if [ "$ip_mode" = "ipv4" ]; then client_allowed_ips="0.0.0.0/0"; fi
+    if [ "$ip_mode" = "ipv6" ]; then client_allowed_ips="::/0"; fi
 
 	echo "正在创建服务器配置文件 wg0.conf..."
 	cat > /etc/wireguard/wg0.conf <<-EOF
@@ -348,7 +359,7 @@ EOF
 		[Peer]
 		PublicKey = $s2
 		Endpoint = $client_endpoint
-		AllowedIPs = 0.0.0.0/0, ::/0
+		AllowedIPs = $client_allowed_ips
 		PersistentKeepalive = 25
 	EOF
     chmod 600 /etc/wireguard/*.conf
@@ -427,7 +438,7 @@ add_new_client() {
     wg set wg0 peer "$new_client_public_key" allowed-ips "$peer_allowed_ips"
     echo -e "\n[Peer]\n# Client: $client_name\nPublicKey = $new_client_public_key\nAllowedIPs = $peer_allowed_ips" >> /etc/wireguard/wg0.conf
 
-    server_public_key=$(cat /etc/wireguard/spublickey)
+    server_public_key=$(cat spublickey)
     
     local client_endpoint; local client_mtu; local client_dns=""
     if [ "$USE_UDP2RAW" = "true" ]; then
@@ -442,8 +453,16 @@ add_new_client() {
         client_mtu=1420
     fi
 
+    local client_allowed_ips="0.0.0.0/0, ::/0" # 默认全局隧道
     if [ "$IP_MODE" = "ipv4" ] || [ "$IP_MODE" = "dual" ]; then client_dns="8.8.8.8"; fi
-    if [ "$IP_MODE" = "ipv6" ] || [ "$IP_MODE" = "dual" ]; then client_dns=${client_dns:+"$client_dns, "}2001:4860:4860::8888; fi
+    if [ "$IP_MODE" = "ipv6" ] || [ "$IP_MODE" = "dual" ]; then
+        client_dns=${client_dns:+"$client_dns, "}2001:4860:4860::8888
+    fi
+
+    # 针对单栈模式优化客户端配置
+    if [ "$IP_MODE" = "ipv4" ]; then client_allowed_ips="0.0.0.0/0"; fi
+    if [ "$IP_MODE" = "ipv6" ]; then client_allowed_ips="::/0"; fi
+
 
     cat > "/etc/wireguard/${client_name}.conf" <<-EOF
 		[Interface]
@@ -454,7 +473,7 @@ add_new_client() {
 		[Peer]
 		PublicKey = $server_public_key
 		Endpoint = $client_endpoint
-		AllowedIPs = 0.0.0.0/0, ::/0
+		AllowedIPs = $client_allowed_ips
 		PersistentKeepalive = 25
 	EOF
     chmod 600 "/etc/wireguard/${client_name}.conf"
