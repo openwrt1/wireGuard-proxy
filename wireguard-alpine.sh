@@ -270,12 +270,22 @@ EOF
 #!/sbin/openrc-run
 
 description="WireGuard quick interface manager"
-command="/usr/bin/wg-quick"
-command_args="\$1 \$RC_SVCNAME"
 
 depend() {
     need net
     after firewall
+}
+
+start() {
+    ebegin "Starting WireGuard interface \${RC_SVCNAME#*.}"
+    /usr/bin/wg-quick up "\${RC_SVCNAME#*.}"
+    eend \$?
+}
+
+stop() {
+    ebegin "Stopping WireGuard interface \${RC_SVCNAME#*.}"
+    /usr/bin/wg-quick down "\${RC_SVCNAME#*.}"
+    eend \$?
 }
 EOF
         # 强制同步到磁盘并等待，确保文件写入完成
@@ -516,4 +526,14 @@ start_menu(){
 # --- 脚本入口 ---
 check_root
 check_alpine
-start_menu
+
+# 检查是否提供了命令行参数，以支持自动化调用
+if [ -n "$1" ]; then
+    case "$1" in
+        uninstall) wireguard_uninstall ;;
+        *) error_exit "未知的参数 '$1'。有效参数: 'uninstall'" $LINENO ;;
+    esac
+else
+    # 如果没有参数，则显示交互式菜单
+    start_menu
+fi
