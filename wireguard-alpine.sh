@@ -357,33 +357,33 @@ EOF
     chmod 600 /etc/wireguard/*.conf
 
 	echo "启动并设置 WireGuard 服务开机自启..."
-    # 确保 OpenRC 服务脚本存在且可执行
-    if [ -f /etc/init.d/wg-quick ]; then
-        # 在 OpenRC 中，为特定接口创建服务链接
-        ln -sf /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
-        rc-update -u # 更新服务缓存
+    # 由于 ifupdown-ng 的存在，wg-quick 的 openrc 脚本可能不会被安装。
+    # 我们将直接使用 wg-quick 命令，并手动创建自启服务。
 
-        rc-service wg-quick.wg0 stop &>/dev/null || true # 确保服务已停止
+    # 1. 强制关闭可能存在的旧接口，确保环境干净
+    wg-quick down wg0 &>/dev/null || true
 
-        if ! rc-service wg-quick.wg0 start; then
-            echo -e "\033[1;31m错误: 'rc-service wg-quick.wg0 start' 执行失败。\033[0m"
-            echo "--- 开始详细诊断 ---"
-            echo "1. 检查 wg0.conf 文件内容:"
-            cat /etc/wireguard/wg0.conf
-            echo -e "\n2. 尝试使用 'bash -x' 模式手动启动以获取详细日志:"
-            bash -x /usr/bin/wg-quick up wg0
-            echo "--- 诊断结束 ---"
-            error_exit "WireGuard 服务启动失败，请检查上面的诊断信息。" $LINENO
-        fi
-
-        rc-update add wg-quick.wg0 default # 添加到开机启动
-    else
-        # 如果标准脚本不存在，则回退到 wg-quick 命令
-        wg-quick down wg0 &>/dev/null || true
-        if ! wg-quick up wg0; then
-            error_exit "WireGuard 服务启动失败 (wg-quick up wg0)。" $LINENO
-        fi
+    # 2. 启动接口
+    if ! wg-quick up wg0; then
+        error_exit "WireGuard 服务启动失败 (wg-quick up wg0)。" $LINENO
     fi
+
+    # 3. 手动创建 OpenRC 自启服务
+    cat > /etc/init.d/wireguard-autostart <<-EOF
+#!/sbin/openrc-run
+description="Starts WireGuard wg0 interface on boot"
+depend() {
+    need net
+}
+start() {
+    /usr/bin/wg-quick up wg0
+}
+stop() {
+    /usr/bin/wg-quick down wg0
+}
+EOF
+    chmod +x /etc/init.d/wireguard-autostart
+    rc-update add wireguard-autostart default
 
 	echo -e "\n🎉 WireGuard 安装完成! 🎉"
     echo "-------------------- 初始客户端配置 --------------------"
@@ -405,15 +405,17 @@ EOF
 # 卸载 WireGuard
 wireguard_uninstall() {
     set +e
-	rc-service wg-quick.wg0 stop &>/dev/null
-	rc-update del wg-quick.wg0 default &>/dev/null
+    # 停止并移除我们自建的启动服务
+    rc-service wireguard-autostart stop &>/dev/null
+    rc-update del wireguard-autostart default &>/dev/null
+    # 停止并移除 udp2raw 服务
     rc-service udp2raw-ipv4 stop &>/dev/null
     rc-update del udp2raw-ipv4 default &>/dev/null
     rc-service udp2raw-ipv6 stop &>/dev/null
     rc-update del udp2raw-ipv6 default &>/dev/null
     set -e
 	apk del wireguard-tools curl iptables ip6tables libqrencode bash &>/dev/null || apk del wireguard-tools curl iptables bash
-	rm -rf /etc/wireguard /etc/init.d/udp2raw-ipv4 /etc/init.d/udp2raw-ipv6 /usr/local/bin/udp2raw-ipv4 /usr/local/bin/udp2raw-ipv6 /etc/init.d/wg-quick.wg0 /etc/init.d/wg-quick
+	rm -rf /etc/wireguard /etc/init.d/udp2raw-ipv4 /etc/init.d/udp2raw-ipv6 /usr/local/bin/udp2raw-ipv4 /usr/local/bin/udp2raw-ipv6 /etc/init.d/wireguard-autostart
 	echo "🎉 WireGuard 及 Udp2raw 已成功卸载。"
 }
 
