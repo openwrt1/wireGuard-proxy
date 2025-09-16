@@ -149,6 +149,11 @@ wireguard_install(){
 
 	echo "正在更新软件包列表..."
 	apt-get update
+
+    # 预设 iptables-persistent 的 debconf 选项，避免安装时出现交互式弹窗
+    echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" | debconf-set-selections
+    echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" | debconf-set-selections
+
 	echo "正在安装 WireGuard 及相关工具..."
 	apt-get install -y wireguard qrencode iptables-persistent curl
     echo -e "\033[0;32m✓ 核心工具安装成功。\033[0m"
@@ -356,7 +361,13 @@ EOF
     echo -e "\033[0;32m✓ WireGuard 服务已启动并设置开机自启。\033[0m"
 
 	echo -e "\n🎉 WireGuard 安装完成! 🎉"
+	echo "-------------------- 初始客户端配置 --------------------"
+    echo "配置文件路径: /etc/wireguard/client.conf"
+    echo "二维码:"
 	qrencode -t ansiutf8 < /etc/wireguard/client.conf
+    echo -e "\n配置文件内容:"
+    cat "/etc/wireguard/client.conf"
+    echo "------------------------------------------------------"
 
     if [ "$use_udp2raw" == "y" ]; then
         display_udp2raw_info "$public_ipv4" "$public_ipv6" "$tcp_port_v4" "$tcp_port_v6" "$udp2raw_password"
