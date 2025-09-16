@@ -224,22 +224,43 @@ wireguard_install(){
         chmod +x /usr/local/bin/udp2raw
         rm -f udp2raw_* version.txt udp2raw_binaries.tar.gz
 
-        echo "正在创建 udp2raw 系统服务..."
-        cat > /etc/systemd/system/udp2raw.service <<-EOF
-			[Unit]
-			Description=udp2raw-tunnel server
-			After=network.target
-			[Service]
-			Type=simple
-			ExecStart=/usr/local/bin/udp2raw -s -l [::]:$tcp_port -r 127.0.0.1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor
-			Restart=on-failure
-			[Install]
-			WantedBy=multi-user.target
-		EOF
-        [ -s /etc/systemd/system/udp2raw.service ] || error_exit "创建 udp2raw.service 文件失败。" $LINENO
+        if [ -n "$public_ipv4" ]; then
+            echo "正在创建 udp2raw IPv4 系统服务..."
+            cat > /etc/systemd/system/udp2raw-ipv4.service <<-EOF
+				[Unit]
+				Description=udp2raw-tunnel server (IPv4)
+				After=network.target
+				[Service]
+				Type=simple
+				ExecStart=/usr/local/bin/udp2raw -s -l $public_ipv4:$tcp_port -r 127.0.0.1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor
+				Restart=on-failure
+				[Install]
+				WantedBy=multi-user.target
+			EOF
+            [ -s /etc/systemd/system/udp2raw-ipv4.service ] || error_exit "创建 udp2raw-ipv4.service 文件失败。" $LINENO
+            systemctl enable udp2raw-ipv4
+            systemctl start udp2raw-ipv4
+        fi
+
+        if [ -n "$public_ipv6" ]; then
+            echo "正在创建 udp2raw IPv6 系统服务..."
+            cat > /etc/systemd/system/udp2raw-ipv6.service <<-EOF
+				[Unit]
+				Description=udp2raw-tunnel server (IPv6)
+				After=network.target
+				[Service]
+				Type=simple
+				ExecStart=/usr/local/bin/udp2raw -s -l [$public_ipv6]:$tcp_port -r ::1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor
+				Restart=on-failure
+				[Install]
+				WantedBy=multi-user.target
+			EOF
+            [ -s /etc/systemd/system/udp2raw-ipv6.service ] || error_exit "创建 udp2raw-ipv6.service 文件失败。" $LINENO
+            systemctl enable udp2raw-ipv6
+            systemctl start udp2raw-ipv6
+        fi
+
         systemctl daemon-reload
-        systemctl enable udp2raw
-        systemctl start udp2raw
         client_endpoint="127.0.0.1:29999"
     else
         read -r -p "请输入 WireGuard 的 UDP 端口 [默认: 39000]: " wg_port
@@ -337,11 +358,12 @@ wireguard_install(){
 wireguard_uninstall() {
     # 卸载前禁用严格模式，以防服务不存在时脚本退出
     set +e
-	systemctl stop wg-quick@wg0 && systemctl disable wg-quick@wg0
-    systemctl stop udp2raw && systemctl disable udp2raw
+    systemctl stop wg-quick@wg0 && systemctl disable wg-quick@wg0
+    systemctl stop udp2raw-ipv4 && systemctl disable udp2raw-ipv4
+    systemctl stop udp2raw-ipv6 && systemctl disable udp2raw-ipv6
     set -e
 	apt-get remove --purge -y wireguard wireguard-tools qrencode
-	rm -rf /etc/wireguard /usr/local/bin/udp2raw /etc/systemd/system/udp2raw.service
+	rm -rf /etc/wireguard /usr/local/bin/udp2raw /etc/systemd/system/udp2raw-ipv4.service /etc/systemd/system/udp2raw-ipv6.service
     systemctl daemon-reload
 	echo "🎉 WireGuard 及 Udp2raw 已成功卸载。"
 }
