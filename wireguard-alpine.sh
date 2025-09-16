@@ -153,8 +153,8 @@ wireguard_install(){
     # 我们将安装 iptables 包来确保兼容性。
 	apk add --no-cache wireguard-tools curl iptables ip6tables bash
 
-    echo "正在尝试安装 libqrencode (用于生成二维码)..."
-    apk add --no-cache libqrencode &>/dev/null
+    echo "正在安装 libqrencode-tools (用于生成二维码)..."
+    apk add --no-cache libqrencode-tools
 
 	echo "正在创建 WireGuard 目录和密钥..."
 	mkdir -p /etc/wireguard && chmod 700 /etc/wireguard
@@ -395,7 +395,7 @@ EOF
 	if command -v qrencode &>/dev/null; then
         qrencode -t ansiutf8 < /etc/wireguard/client.conf
     else
-        echo "[提示] 未安装 libqrencode，无法生成二维码。请手动使用 client.conf 文件。"
+        echo "[提示] libqrencode-tools 安装失败，无法生成二维码。请手动使用 client.conf 文件。"
     fi
     printf "\\n配置文件内容:\\n"
     cat "/etc/wireguard/client.conf"
@@ -421,7 +421,7 @@ wireguard_uninstall() {
     ip link delete wg0 &>/dev/null || true
     set -e
 	# 不再卸载 bash，因为它可能是系统或用户需要的通用组件
-	apk del wireguard-tools curl iptables ip6tables libqrencode &>/dev/null || apk del wireguard-tools curl iptables &>/dev/null || true
+	apk del wireguard-tools curl iptables ip6tables libqrencode-tools &>/dev/null || apk del wireguard-tools curl iptables &>/dev/null || true
     # 尝试卸载 legacy 包
     apk del iptables-legacy ip6tables-legacy &>/dev/null || true
 	rm -rf /etc/wireguard /etc/init.d/udp2raw-ipv4 /etc/init.d/udp2raw-ipv6 /usr/local/bin/udp2raw-ipv4 /usr/local/bin/udp2raw-ipv6 /etc/init.d/wireguard-autostart
@@ -465,7 +465,7 @@ add_new_client() {
     new_client_public_key=$(echo "$new_client_private_key" | wg pubkey)
 
     wg set wg0 peer "$new_client_public_key" allowed-ips "$peer_allowed_ips"
-    echo -e "\\n[Peer]\\n# Client: $client_name\\nPublicKey = $new_client_public_key\\nAllowedIPs = $peer_allowed_ips" >> /etc/wireguard/wg0.conf
+    printf "\\n[Peer]\\n# Client: %s\\nPublicKey = %s\\nAllowedIPs = %s\\n" "$client_name" "$new_client_public_key" "$peer_allowed_ips" >> /etc/wireguard/wg0.conf
 
     server_public_key=$(cat spublickey)
     
