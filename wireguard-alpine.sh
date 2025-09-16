@@ -115,6 +115,16 @@ wireguard_install(){
 	apk update
 	echo "正在安装 WireGuard 及相关工具..."
 	apk add --no-cache wireguard-tools curl iptables
+
+    # --- 调试代码开始 ---
+    echo -e "\n\033[1;33m--- 调试信息开始 ---\033[0m"
+    echo "[调试] 检查 /etc/init.d/ 目录内容:"
+    ls -l /etc/init.d/
+    echo "[调试] 检查 wireguard-tools 软件包安装的文件列表:"
+    apk info -L wireguard-tools
+    echo -e "\033[1;33m--- 调试信息结束 ---\033[0m\n"
+    # --- 调试代码结束 ---
+
     echo "正在尝试安装 libqrencode (用于生成二维码)..."
     apk add --no-cache libqrencode &>/dev/null
 
@@ -258,6 +268,9 @@ EOF
         # 强制创建服务链接
         ln -sf /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
         
+        # 强制 OpenRC 更新服务依赖缓存
+        rc-update -u
+
         # 使用 OpenRC 标准方式管理服务
         rc-service wg-quick.wg0 stop &>/dev/null || true
         rc-service wg-quick.wg0 start
