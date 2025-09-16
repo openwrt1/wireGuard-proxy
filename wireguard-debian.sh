@@ -325,8 +325,8 @@ EOF
     chmod 600 /etc/wireguard/*.conf
 
 	echo "启动 WireGuard 服务..."
-	wg-quick down wg0 &>/dev/null || true
-	wg-quick up wg0
+	ip link del wg0 &>/dev/null || true # 强制删除可能存在的接口
+	wg-quick up wg0 # 现在再启动新的接口
 	systemctl enable wg-quick@wg0
 
 	echo -e "\n🎉 WireGuard 安装完成! 🎉"
