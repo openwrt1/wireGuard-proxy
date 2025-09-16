@@ -253,7 +253,7 @@ wireguard_install(){
 				After=network.target
 				[Service]
 				Type=simple
-				ExecStart=/usr/local/bin/udp2raw-ipv6 -s -l [$public_ipv6]:$tcp_port -r ::1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor
+				ExecStart=/usr/local/bin/udp2raw-ipv6 -s -l [$public_ipv6]:$tcp_port -r [::1]:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor
 				Restart=on-failure
 				[Install]
 				WantedBy=multi-user.target
