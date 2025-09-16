@@ -422,7 +422,7 @@ wireguard_uninstall() {
     wg-quick down wg0 &>/dev/null || true
     ip link delete wg0 &>/dev/null || true
     set -e
-	# 不再卸载 bash，因为它可能是系统或用户需要的通用组件
+	# 不再卸载 bash，因为它可能是系统或用户需要的通用组件。
 	apk del wireguard-tools curl iptables ip6tables libqrencode &>/dev/null || apk del wireguard-tools curl iptables &>/dev/null || true
     # 尝试卸载 legacy 包
     apk del iptables-legacy ip6tables-legacy &>/dev/null || true
