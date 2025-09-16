@@ -366,6 +366,8 @@ EOF
 
     # 1. 强制关闭可能存在的旧接口，确保环境干净
     wg-quick down wg0 &>/dev/null || true
+    ip link delete wg0 &>/dev/null || true
+    apk del wireguard-tools curl libqrencode bash &>/dev/null || true
 
     # 2. 启动接口
     if ! wg-quick up wg0; then
