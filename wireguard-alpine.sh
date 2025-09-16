@@ -367,7 +367,7 @@ EOF
     # 1. 强制关闭可能存在的旧接口，确保环境干净
     wg-quick down wg0 &>/dev/null || true
     ip link delete wg0 &>/dev/null || true
-    apk del wireguard-tools curl libqrencode bash &>/dev/null || true
+
 
     # 2. 启动接口
     if ! wg-quick up wg0; then
@@ -419,6 +419,8 @@ wireguard_uninstall() {
     rc-update del udp2raw-ipv4 default &>/dev/null
     rc-service udp2raw-ipv6 stop &>/dev/null
     rc-update del udp2raw-ipv6 default &>/dev/null
+    wg-quick down wg0 &>/dev/null || true
+    ip link delete wg0 &>/dev/null || true
     set -e
 	apk del wireguard-tools curl iptables ip6tables libqrencode bash &>/dev/null || apk del wireguard-tools curl iptables bash
     # 尝试卸载 legacy 包
