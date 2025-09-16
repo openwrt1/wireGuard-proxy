@@ -422,7 +422,8 @@ wireguard_uninstall() {
     wg-quick down wg0 &>/dev/null || true
     ip link delete wg0 &>/dev/null || true
     set -e
-	apk del wireguard-tools curl iptables ip6tables libqrencode bash &>/dev/null || apk del wireguard-tools curl iptables bash
+	# 不再卸载 bash，因为它可能是系统或用户需要的通用组件
+	apk del wireguard-tools curl iptables ip6tables libqrencode &>/dev/null || apk del wireguard-tools curl iptables &>/dev/null || true
     # 尝试卸载 legacy 包
     apk del iptables-legacy ip6tables-legacy &>/dev/null || true
 	rm -rf /etc/wireguard /etc/init.d/udp2raw-ipv4 /etc/init.d/udp2raw-ipv6 /usr/local/bin/udp2raw-ipv4 /usr/local/bin/udp2raw-ipv6 /etc/init.d/wireguard-autostart
@@ -545,6 +546,9 @@ delete_client() {
     
     # 使用 sed 删除对应的 [Peer] 块，更健壮
     sed -i "/^# Client: ${client_name}$/,/^$/d" /etc/wireguard/wg0.conf
+    
+    # 保存当前接口的运行配置，确保与文件同步
+    wg-quick save wg0 &>/dev/null || true
     
     rm -f "/etc/wireguard/${client_name}.conf"
 
