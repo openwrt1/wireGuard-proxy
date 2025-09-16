@@ -87,21 +87,30 @@ get_public_ips() {
 
 # 显示 Udp2raw 客户端配置信息
 display_udp2raw_info() {
-    local server_ip=$1
-    local tcp_port=$2
-    local udp2raw_password=$3
+    local server_ipv4=$1
+    local server_ipv6=$2
+    local tcp_port_v4=$3
+    local tcp_port_v6=$4
+    local udp2raw_password=$5
 
     echo -e "\n=================== 客户端 Udp2raw 设置 ==================="
     echo "伪装模式已启用，您需要在客户端上运行 udp2raw。"
     echo "请从 https://github.com/wangyu-/udp2raw/releases 下载 udp2raw 二进制文件。"
-    echo "解压后，根据您的操作系统，在终端或命令行中运行对应命令："
-    echo ""
-    echo "服务器 TCP 端口: $tcp_port"
     echo "连接密码: $udp2raw_password"
     echo ""
-    echo -e "\033[1;32m--- 通用连接命令 (请替换 <udp2raw_binary> 为对应文件名) ---\033[0m"
-    echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r $server_ip:$tcp_port -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
-    echo ""
+
+    if [ -n "$tcp_port_v4" ]; then
+        echo -e "\033[1;32m--- IPv4 连接命令 (服务器端口: $tcp_port_v4) ---\033[0m"
+        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r $server_ipv4:$tcp_port_v4 -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
+        echo ""
+    fi
+
+    if [ -n "$tcp_port_v6" ]; then
+        echo -e "\033[1;32m--- IPv6 连接命令 (服务器端口: $tcp_port_v6) ---\033[0m"
+        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r [$server_ipv6]:$tcp_port_v6 -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
+        echo ""
+    fi
+
     echo "--------------------------------------------------------------"
     echo "然后再启动 WireGuard 客户端。"
     echo "=============================================================="
@@ -347,10 +356,13 @@ EOF
 	echo "启动并设置 WireGuard 服务开机自启..."
     # 确保 OpenRC 服务脚本存在且可执行
     if [ -f /etc/init.d/wg-quick ]; then
-        # 使用 wg-quick@<interface> 的标准 OpenRC 服务名
-        rc-service wg-quick@wg0 stop &>/dev/null || true
-        rc-service wg-quick@wg0 start
-        rc-update add wg-quick@wg0 default
+        # 在 OpenRC 中，为特定接口创建服务链接
+        ln -sf /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
+        rc-update -u # 更新服务缓存
+
+        rc-service wg-quick.wg0 stop &>/dev/null || true
+        rc-service wg-quick.wg0 start
+        rc-update add wg-quick.wg0 default
     else
         # 如果标准脚本不存在，则回退到 wg-quick 命令
         wg-quick down wg0 &>/dev/null || true
@@ -358,11 +370,16 @@ EOF
     fi
 
 	echo -e "\n🎉 WireGuard 安装完成! 🎉"
-	if command -v qrencode &> /dev/null; then
+    echo "-------------------- 初始客户端配置 --------------------"
+    echo "配置文件路径: /etc/wireguard/client.conf"
+	if command -v qrencode &>/dev/null; then
         qrencode -t ansiutf8 < /etc/wireguard/client.conf
     else
         echo "[提示] 未安装 libqrencode，无法生成二维码。请手动使用 client.conf 文件。"
     fi
+    echo -e "\n配置文件内容:"
+    cat "/etc/wireguard/client.conf"
+    echo "------------------------------------------------------"
 
     if [ "$use_udp2raw" == "y" ]; then
         display_udp2raw_info "$public_ipv4" "$public_ipv6" "$tcp_port_v4" "$tcp_port_v6" "$udp2raw_password"
@@ -372,15 +389,15 @@ EOF
 # 卸载 WireGuard
 wireguard_uninstall() {
     set +e
-	rc-service wg-quick@wg0 stop &>/dev/null
-	rc-update del wg-quick@wg0 default &>/dev/null
+	rc-service wg-quick.wg0 stop &>/dev/null
+	rc-update del wg-quick.wg0 default &>/dev/null
     rc-service udp2raw-ipv4 stop &>/dev/null
     rc-update del udp2raw-ipv4 default &>/dev/null
     rc-service udp2raw-ipv6 stop &>/dev/null
     rc-update del udp2raw-ipv6 default &>/dev/null
     set -e
 	apk del wireguard-tools curl iptables ip6tables libqrencode &>/dev/null || apk del wireguard-tools curl iptables
-	rm -rf /etc/wireguard /etc/init.d/udp2raw-ipv4 /etc/init.d/udp2raw-ipv6 /usr/local/bin/udp2raw-ipv4 /usr/local/bin/udp2raw-ipv6
+	rm -rf /etc/wireguard /etc/init.d/udp2raw-ipv4 /etc/init.d/udp2raw-ipv6 /usr/local/bin/udp2raw-ipv4 /usr/local/bin/udp2raw-ipv6 /etc/init.d/wg-quick.wg0 /etc/init.d/wg-quick
 	echo "🎉 WireGuard 及 Udp2raw 已成功卸载。"
 }
 
@@ -464,9 +481,14 @@ add_new_client() {
     chmod 600 "/etc/wireguard/${client_name}.conf"
 
     echo -e "\n🎉 新客户端 '$client_name' 添加成功!"
-    if command -v qrencode &> /dev/null; then
+    echo "-------------------- 客户端配置 --------------------"
+    echo "配置文件路径: /etc/wireguard/${client_name}.conf"
+    if command -v qrencode &>/dev/null; then
         qrencode -t ansiutf8 < "/etc/wireguard/${client_name}.conf"
     fi
+    echo -e "\n配置文件内容:"
+    cat "/etc/wireguard/${client_name}.conf"
+    echo "------------------------------------------------------"
     
     if [ "$USE_UDP2RAW" = "true" ]; then
         echo "提醒: 您的服务正使用 udp2raw，新客户端也需按以下信息配置。"
@@ -493,12 +515,9 @@ delete_client() {
 
     wg set wg0 peer "$client_pub_key" remove
     
-    awk -v key="$client_pub_key" '
-        BEGIN { RS = "\n\n"; ORS = "\n\n" }
-        !/PublicKey = / || $0 !~ key
-    ' /etc/wireguard/wg0.conf > /etc/wireguard/wg0.conf.tmp
-    mv /etc/wireguard/wg0.conf.tmp /etc/wireguard/wg0.conf
-
+    # 使用 sed 删除对应的 [Peer] 块，更健壮
+    sed -i "/^# Client: ${client_name}$/,/^$/d" /etc/wireguard/wg0.conf
+    
     rm -f "/etc/wireguard/${client_name}.conf"
 
     echo "🎉 客户端 '$client_name' 已成功删除。"
@@ -513,12 +532,12 @@ list_clients() {
     echo "==================== 所有客户端配置 ===================="
     for client in "${CLIENTS[@]}"; do
         echo -e "\n--- 客户端: \033[1;32m$client\033[0m ---"
-        if command -v qrencode &> /dev/null; then
+        echo "配置文件路径: /etc/wireguard/${client}.conf"
+        if command -v qrencode &>/dev/null; then
             qrencode -t ansiutf8 < "/etc/wireguard/${client}.conf"
-        else
-            echo "[配置内容]"
-            cat "/etc/wireguard/${client}.conf"
         fi
+        echo -e "\n配置文件内容:"
+        cat "/etc/wireguard/${client}.conf"
         echo "------------------------------------------------------"
     done
     echo "======================================================="
