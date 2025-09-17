@@ -571,18 +571,19 @@ delete_client() {
 list_clients() {
     if [ ! -d /etc/wireguard ]; then error_exit "WireGuard 尚未安装。" $LINENO; fi
     local CLIENTS
-    mapfile -t CLIENTS < <(find /etc/wireguard/ -name "*.conf" -exec basename {} \; | sed 's/\\.conf$//' | grep -v '^wg0$' || true)
+    mapfile -t CLIENTS < <(find /etc/wireguard/ -name "*.conf" -exec basename {} .conf \; | grep -v '^wg0$' || true)
     if [ ${#CLIENTS[@]} -eq 0 ]; then echo "没有找到任何客户端配置。"; exit 0; fi
 
     echo "==================== 所有客户端配置 ===================="
     for client in "${CLIENTS[@]}"; do
         printf "\\n--- 客户端: \\033[1;32m%s\\033[0m ---\\n" "$client"
-        echo "配置文件路径: /etc/wireguard/${client}.conf"
+        local client_conf_path="/etc/wireguard/${client}.conf"
+        echo "配置文件路径: $client_conf_path"
         if command -v qrencode &>/dev/null; then
-            qrencode -t ansiutf8 < "/etc/wireguard/${client}.conf"
+            qrencode -t ansiutf8 < "$client_conf_path"
         fi
         printf "\\n配置文件内容:\\n"
-        cat "/etc/wireguard/${client}.conf"
+        cat "$client_conf_path"
         echo "------------------------------------------------------"
     done
     echo "======================================================="
