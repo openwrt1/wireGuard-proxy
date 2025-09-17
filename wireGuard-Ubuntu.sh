@@ -200,7 +200,8 @@ wireguard_install(){
     } > "$PARAMS_FILE"
 
     local client_endpoint
-    local wg_port=$(rand_port)
+    local wg_port
+    wg_port=$(rand_port)
     local client_mtu
     local tcp_port_v4=""
     local tcp_port_v6=""

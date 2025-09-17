@@ -200,7 +200,8 @@ wireguard_install(){
     } > "$PARAMS_FILE"
 
     local client_endpoint
-    local wg_port=$(rand_port)
+    local wg_port
+    wg_port=$(rand_port)
     local client_mtu
     local tcp_port_v4=""
     local tcp_port_v6=""
@@ -560,7 +561,7 @@ optimize_system() {
     if [[ ! "$confirm" =~ ^[yY] ]]; then echo "操作已取消。"; exit 0; fi
 
     apt-get update
-    apt-get install -y --install-recommends linux-generic-hwe-$(lsb_release -rs)
+    apt-get install -y --install-recommends "linux-generic-hwe-$(lsb_release -rs)"
 
     if ! grep -q -E "^\s*net.core.default_qdisc\s*=\s*fq" /etc/sysctl.conf; then echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf; fi
     if ! grep -q -E "^\s*net.ipv4.tcp_congestion_control\s*=\s*bbr" /etc/sysctl.conf; then echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf; fi

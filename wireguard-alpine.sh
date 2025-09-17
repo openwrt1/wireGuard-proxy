@@ -47,7 +47,9 @@ rand_port() {
 
 # 初始系统状态检查
 initial_check() {
+    local kernel_version
     kernel_version=$(uname -r)
+    local bbr_status
     bbr_status=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "未知")
 
     echo "==================== 系统状态检查 ===================="
@@ -101,13 +103,13 @@ display_udp2raw_info() {
 
     if [ -n "$tcp_port_v4" ]; then
         printf "\\033[1;32m--- IPv4 连接命令 (服务器端口: %s) ---\\033[0m\\n" "$tcp_port_v4"
-        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r $server_ipv4:$tcp_port_v4 -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor"
+        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r $server_ipv4:$tcp_port_v4 -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
         echo ""
     fi
 
     if [ -n "$tcp_port_v6" ]; then
         printf "\\033[1;32m--- IPv6 连接命令 (服务器端口: %s) ---\\033[0m\\n" "$tcp_port_v6"
-        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r [$server_ipv6]:$tcp_port_v6 -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor"
+        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r [$server_ipv6]:$tcp_port_v6 -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
         echo ""
     fi
 
@@ -127,6 +129,7 @@ wireguard_install(){
     fi
 
     # IP 模式选择
+    local ip_mode
     echo "请选择服务器的 IP 模式:"
     echo "  1) IPv4 Only (仅监听 IPv4)"
     echo "  2) IPv6 Only (仅监听 IPv6)"
@@ -143,6 +146,7 @@ wireguard_install(){
         printf "\\033[1;33m警告: 混合模式在某些网络环境下可能导致客户端连接混乱或速度不稳定。\\033[0m\\n"
     fi
 
+    local use_udp2raw
     read -r -p "是否启用 TCP 伪装 (udp2raw)？[y/N]: " use_udp2raw
     use_udp2raw=$(echo "$use_udp2raw" | tr '[:upper:]' '[:lower:]')
 
@@ -157,6 +161,7 @@ wireguard_install(){
 	mkdir -p /etc/wireguard && chmod 700 /etc/wireguard
 	cd /etc/wireguard || exit 1
 
+    local s1 s2 c1 c2
 	wg genkey | tee sprivatekey | wg pubkey > spublickey
 	wg genkey | tee cprivatekey | wg pubkey > cpublickey
 	chmod 600 sprivatekey cprivatekey
@@ -190,20 +195,16 @@ wireguard_install(){
         echo "SERVER_IPV6=${public_ipv6}"
     } > "$PARAMS_FILE"
 
-    local client_endpoint
-    local wg_port=$(rand_port)
-    local client_mtu
-    local postup_rules=""
-    local predown_rules=""
-    local tcp_port_v4=""
-    local tcp_port_v6=""
-    local udp2raw_password=""
+    local client_endpoint wg_port client_mtu postup_rules predown_rules tcp_port_v4 tcp_port_v6 udp2raw_password
+    wg_port=$(rand_port)
 
+    local net_interface
     net_interface=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
     if [ -z "$net_interface" ]; then net_interface=$(ip -o -6 route show to default | awk '{print $5}' | head -n1); fi
     if [ -z "$net_interface" ]; then error_exit "无法自动检测到有效的主网络接口。" $LINENO; fi
 	echo "检测到主网络接口为: $net_interface"
 
+    local IPTABLES_PATH IP6TABLES_PATH
     IPTABLES_PATH=$(command -v iptables)
     IP6TABLES_PATH=$(command -v ip6tables)
 
@@ -231,6 +232,7 @@ wireguard_install(){
         } >> "$PARAMS_FILE"
 
         echo "正在下载并安装 udp2raw..."
+        local UDP2RAW_URL ARCH UDP2RAW_BINARY
         UDP2RAW_URL="https://github.com/wangyu-/udp2raw/releases/download/20230206.0/udp2raw_binaries.tar.gz"
         curl -L -o udp2raw_binaries.tar.gz "$UDP2RAW_URL"
         tar -xzf udp2raw_binaries.tar.gz
@@ -311,7 +313,7 @@ EOF
         fi
     fi
 
-    server_address=""; client_address=""; client_dns=""; peer_allowed_ips=""
+    local server_address="" client_address="" client_dns="" peer_allowed_ips=""
     if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
         server_address="10.0.0.1/24"; client_address="10.0.0.2/24"; peer_allowed_ips="10.0.0.2/32"; client_dns="1.1.1.1"
     fi
@@ -436,18 +438,20 @@ wireguard_uninstall() {
 add_new_client() {
     if [ ! -f /etc/wireguard/wg0.conf ]; then error_exit "WireGuard 尚未安装。" $LINENO; fi
 
+    local PARAMS_FILE IP_MODE SERVER_IPV4 SERVER_IPV6 USE_UDP2RAW WG_PORT TCP_PORT_V4 TCP_PORT_V6 UDP2RAW_PASSWORD
     PARAMS_FILE="/etc/wireguard/params"
-    IP_MODE=""; SERVER_IPV4=""; SERVER_IPV6=""; USE_UDP2RAW=""; WG_PORT=""; TCP_PORT_V4=""; TCP_PORT_V6=""; UDP2RAW_PASSWORD=""
     # shellcheck source=/etc/wireguard/params
     if [ -f "$PARAMS_FILE" ]; then source "$PARAMS_FILE"; else error_exit "params 文件不存在。" $LINENO; fi
 
+    local client_name
     read -r -p "请输入新客户端的名称: " client_name
     if [ -z "$client_name" ]; then error_exit "客户端名称不能为空。" $LINENO; fi
     if [ -f "/etc/wireguard/${client_name}.conf" ]; then error_exit "名为 ${client_name} 的客户端已存在。" $LINENO; fi
 
-    new_client_ip_v4=""; new_client_ip_v6=""; peer_allowed_ips=""; client_address=""
+    local new_client_ip_v4 new_client_ip_v6 peer_allowed_ips client_address
 
     if [ "$IP_MODE" = "ipv4" ] || [ "$IP_MODE" = "dual" ]; then
+        local last_ip_octet next_ip_octet
         last_ip_octet=$(grep -oP '10\\.0\\.0\\.\\K[0-9]+' /etc/wireguard/wg0.conf | sort -n | tail -1 || echo 1)
         next_ip_octet=$((last_ip_octet + 1))
         if [ "$next_ip_octet" -gt 254 ]; then error_exit "IPv4 地址池已满。" $LINENO; fi
@@ -456,6 +460,7 @@ add_new_client() {
         client_address="$new_client_ip_v4/24"
     fi
     if [ "$IP_MODE" = "ipv6" ] || [ "$IP_MODE" = "dual" ]; then
+        local last_ip_octet next_ip_octet
         last_ip_octet=$(grep -oP 'fd86:ea04:1111::\\K[0-9a-fA-F]+' /etc/wireguard/wg0.conf | sort -n | tail -1 || echo 1)
         next_ip_octet=$((last_ip_octet + 1))
         new_client_ip_v6="fd86:ea04:1111::${next_ip_octet}"
@@ -465,15 +470,17 @@ add_new_client() {
     echo "为新客户端分配的 IP: ${new_client_ip_v4:-N/A} ${new_client_ip_v6:-N/A}"
 
     cd /etc/wireguard || exit 1
+    local new_client_private_key new_client_public_key
     new_client_private_key=$(wg genkey)
     new_client_public_key=$(echo "$new_client_private_key" | wg pubkey)
 
     wg set wg0 peer "$new_client_public_key" allowed-ips "$peer_allowed_ips"
     printf "\\n[Peer]\\n# Client: %s\\nPublicKey = %s\\nAllowedIPs = %s\\n" "$client_name" "$new_client_public_key" "$peer_allowed_ips" >> /etc/wireguard/wg0.conf
 
+    local server_public_key
     server_public_key=$(cat spublickey)
     
-    local client_endpoint; local client_mtu; local client_dns=""
+    local client_endpoint client_mtu client_dns=""
     if [ "$USE_UDP2RAW" = "true" ]; then
         client_endpoint="127.0.0.1:29999"
         client_mtu=1280
@@ -532,15 +539,18 @@ delete_client() {
     if [ ! -f /etc/wireguard/wg0.conf ]; then error_exit "WireGuard 尚未安装。" $LINENO; fi
 
     echo "可用的客户端配置:"
+    local CLIENTS
     mapfile -t CLIENTS < <(find /etc/wireguard/ -name "*.conf" -printf "%f\\n" | sed 's/\\.conf$//' | grep -v '^wg0$' || true)
     if [ ${#CLIENTS[@]} -eq 0 ]; then echo "没有找到任何客户端。"; exit 0; fi
     printf '%s\\n' "${CLIENTS[@]}"
 
+    local client_name
     read -r -p "请输入要删除的客户端名称: " client_name
     if [ -z "$client_name" ]; then error_exit "客户端名称不能为空。" $LINENO; fi
     # 使用更安全的通配符匹配来检查客户端是否存在
     if [[ ! " ${CLIENTS[*]} " == *" ${client_name} "* ]]; then error_exit "客户端 ${client_name} 不存在。" $LINENO; fi
 
+    local client_pub_key
     client_pub_key=$(awk -v client="$client_name" '/^# Client: / && $3==client {getline; print $3}' /etc/wireguard/wg0.conf)
     if [ -z "$client_pub_key" ]; then error_exit "无法在 wg0.conf 中找到客户端 ${client_name} 的公钥。" $LINENO; fi
 
@@ -560,6 +570,7 @@ delete_client() {
 # 显示所有客户端配置
 list_clients() {
     if [ ! -d /etc/wireguard ]; then error_exit "WireGuard 尚未安装。" $LINENO; fi
+    local CLIENTS
     mapfile -t CLIENTS < <(find /etc/wireguard/ -name "*.conf" -printf "%f\\n" | sed 's/\\.conf$//' | grep -v '^wg0$' || true)
     if [ ${#CLIENTS[@]} -eq 0 ]; then echo "没有找到任何客户端配置。"; exit 0; fi
 
@@ -581,7 +592,7 @@ list_clients() {
 show_udp2raw_config() {
     if [ ! -f /etc/wireguard/params ]; then error_exit "WireGuard 尚未安装或配置文件不完整。" $LINENO; fi
     
-    IP_MODE=""; SERVER_IPV4=""; SERVER_IPV6=""; USE_UDP2RAW=""; WG_PORT=""; TCP_PORT_V4=""; TCP_PORT_V6=""; UDP2RAW_PASSWORD=""
+    local IP_MODE SERVER_IPV4 SERVER_IPV6 USE_UDP2RAW WG_PORT TCP_PORT_V4 TCP_PORT_V6 UDP2RAW_PASSWORD
     # shellcheck source=/etc/wireguard/params
     source /etc/wireguard/params
 
@@ -619,6 +630,7 @@ start_menu(){
 	echo "7. 优化系统 (开启 BBR)"
 	echo "8. 退出脚本"
 	echo
+    local num
 	read -r -p "请输入数字 [1-8]: " num
 	case "$num" in
 	1) wireguard_install ;;
