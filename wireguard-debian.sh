@@ -96,19 +96,20 @@ display_udp2raw_info() {
 
     echo -e "\n=================== 客户端 Udp2raw 设置 ==================="
     echo "伪装模式已启用，您需要在客户端上运行 udp2raw。"
-    echo "请从 https://github.com/wangyu-/udp2raw/releases 下载 udp2raw 二进制文件。"
+    echo "提示: 以下命令已适配 udp2raw_mp 等不支持 -a 参数的客户端。"
+    echo "如果您使用原版 udp2raw，请将 --raw-mode easyfaketcp 改为 --raw-mode faketcp 并添加 -a 参数。"
     echo "连接密码: $udp2raw_password"
     echo ""
 
     if [ -n "$tcp_port_v4" ]; then
         echo -e "\033[1;32m--- IPv4 连接命令 (服务器端口: $tcp_port_v4) ---\033[0m"
-        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r $server_ipv4:$tcp_port_v4 -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor"
+        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r $server_ipv4:$tcp_port_v4 -k \"$udp2raw_password\" --raw-mode easyfaketcp --cipher-mode xor"
         echo ""
     fi
 
     if [ -n "$tcp_port_v6" ]; then
         echo -e "\033[1;32m--- IPv6 连接命令 (服务器端口: $tcp_port_v6) ---\033[0m"
-        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r [$server_ipv6]:$tcp_port_v6 -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor"
+        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r [$server_ipv6]:$tcp_port_v6 -k \"$udp2raw_password\" --raw-mode easyfaketcp --cipher-mode xor"
         echo ""
     fi
 
@@ -243,7 +244,7 @@ Description=udp2raw-tunnel server (IPv4)
 After=network.target
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/udp2raw-ipv4 -s -l 0.0.0.0:$tcp_port_v4 -r 127.0.0.1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor
+ExecStart=/usr/local/bin/udp2raw-ipv4 -s -l 0.0.0.0:$tcp_port_v4 -r 127.0.0.1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor -a
 Restart=on-failure
 [Install]
 WantedBy=multi-user.target
@@ -263,7 +264,7 @@ Description=udp2raw-tunnel server (IPv6)
 After=network.target
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/udp2raw-ipv6 -s -l [::]:$tcp_port_v6 -r 127.0.0.1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor
+ExecStart=/usr/local/bin/udp2raw-ipv6 -s -l [::]:$tcp_port_v6 -r 127.0.0.1:$wg_port -k "$udp2raw_password" --raw-mode faketcp --cipher-mode xor -a
 Restart=on-failure
 [Install]
 WantedBy=multi-user.target
@@ -290,10 +291,24 @@ EOF
         fi
     fi
 
-    net_interface=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
-    if [ -z "$net_interface" ]; then net_interface=$(ip -o -6 route show to default | awk '{print $5}' | head -n1); fi
-    if [ -z "$net_interface" ]; then error_exit "无法自动检测到有效的主网络接口。" $LINENO; fi
-	echo "检测到主网络接口为: $net_interface"
+    local net_interface net_interface_ipv6
+    if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
+        net_interface=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
+        if [ -z "$net_interface" ]; then error_exit "无法自动检测到有效的 IPv4 主网络接口。" $LINENO; fi
+        echo "检测到 IPv4 主网络接口为: $net_interface"
+    fi
+    if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
+        net_interface_ipv6=$(ip -o -6 route show to default | awk '{print $5}' | head -n1)
+        if [ -z "$net_interface_ipv6" ]; then
+            net_interface_ipv6=$(ip -6 addr show scope global | grep -oP 'dev \K[^ ]+' | head -n1)
+        fi
+        if [ -z "$net_interface_ipv6" ]; then error_exit "无法自动检测到有效的 IPv6 主网络接口。" $LINENO; fi
+        echo "检测到 IPv6 主网络接口为: $net_interface_ipv6"
+    fi
+
+    if [ "$ip_mode" = "dual" ] && [ -n "$net_interface" ] && [ -n "$net_interface_ipv6" ] && [ "$net_interface" != "$net_interface_ipv6" ]; then
+        echo -e "\033[1;33m提示: 检测到 IPv4 ($net_interface) 和 IPv6 ($net_interface_ipv6) 使用了不同的网络接口 (分离接口模式)。\033[0m"
+    fi
 
     # 使用 iptables-persistent 进行防火墙规则持久化
     echo "配置防火墙规则..."
@@ -313,7 +328,7 @@ EOF
         iptables -I FORWARD 1 -i wg0 -j ACCEPT && iptables -I FORWARD 1 -m state --state RELATED,ESTABLISHED -j ACCEPT
     fi
     if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
-        ip6tables -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o "$net_interface" -j MASQUERADE
+        ip6tables -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o "$net_interface_ipv6" -j MASQUERADE
         ip6tables -I FORWARD 1 -i wg0 -j ACCEPT && ip6tables -I FORWARD 1 -m state --state RELATED,ESTABLISHED -j ACCEPT
     fi
 

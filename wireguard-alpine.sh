@@ -97,19 +97,20 @@ display_udp2raw_info() {
 
     printf "\n=================== 客户端 Udp2raw 设置 ===================\n"
     echo "伪装模式已启用，您需要在客户端上运行 udp2raw。"
-    echo "请从 https://github.com/wangyu-/udp2raw/releases 下载 udp2raw 二进制文件。"
+    echo "提示: 以下命令已适配 udp2raw_mp 等不支持 -a 参数的客户端。"
+    echo "如果您使用原版 udp2raw，请将 --raw-mode easyfaketcp 改为 --raw-mode faketcp 并添加 -a 参数。"
     echo "连接密码: $udp2raw_password"
     echo ""
 
     if [ -n "$tcp_port_v4" ]; then
         printf "\033[1;32m--- IPv4 连接命令 (服务器端口: %s) ---\033[0m\n" "$tcp_port_v4"
-        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r $server_ipv4:$tcp_port_v4 -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
+        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r $server_ipv4:$tcp_port_v4 -k \"$udp2raw_password\" --raw-mode easyfaketcp --cipher-mode xor"
         echo ""
     fi
 
     if [ -n "$tcp_port_v6" ]; then
         printf "\033[1;32m--- IPv6 连接命令 (服务器端口: %s) ---\033[0m\n" "$tcp_port_v6"
-        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r [$server_ipv6]:$tcp_port_v6 -k \"$udp2raw_password\" --raw-mode faketcp --cipher-mode xor -a"
+        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r [$server_ipv6]:$tcp_port_v6 -k \"$udp2raw_password\" --raw-mode easyfaketcp --cipher-mode xor"
         echo ""
     fi
 
@@ -198,31 +199,36 @@ wireguard_install(){
     local client_endpoint wg_port client_mtu postup_rules predown_rules tcp_port_v4 tcp_port_v6 udp2raw_password
     wg_port=$(rand_port)
 
-    local net_interface
-    net_interface=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
-    if [ -z "$net_interface" ]; then net_interface=$(ip -o -6 route show to default | awk '{print $5}' | head -n1); fi
-    if [ -z "$net_interface" ]; then error_exit "无法自动检测到有效的主网络接口。" $LINENO; fi
-	echo "检测到主网络接口为: $net_interface"
+    local net_interface net_interface_ipv6
+    if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
+        net_interface=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
+        if [ -z "$net_interface" ]; then error_exit "无法自动检测到有效的 IPv4 主网络接口。" $LINENO; fi
+        echo "检测到 IPv4 主网络接口为: $net_interface"
+    fi
+    if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
+        net_interface_ipv6=$(ip -o -6 route show to default | awk '{print $5}' | head -n1)
+        if [ -z "$net_interface_ipv6" ]; then
+            # Fallback for systems without a default IPv6 route but with a global IPv6 address
+            net_interface_ipv6=$(ip -6 addr show scope global | grep -oP 'dev \K[^ ]+' | head -n1)
+        fi
+        if [ -z "$net_interface_ipv6" ]; then error_exit "无法自动检测到有效的 IPv6 主网络接口。" $LINENO; fi
+        echo "检测到 IPv6 主网络接口为: $net_interface_ipv6"
+    fi
 
     local IPTABLES_PATH IP6TABLES_PATH
     IPTABLES_PATH=$(command -v iptables)
     IP6TABLES_PATH=$(command -v ip6tables)
 
-    if [ -n "$net_interface" ]; then
-        if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
-            postup_rules="$IPTABLES_PATH -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
-            predown_rules="$IPTABLES_PATH -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
-        fi
-        if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
-            # 对于 IPv6，需要使用 MASQUERADE (NAT) 来允许私有地址范围 (ULA) 的客户端访问互联网
-            postup_rules="${postup_rules} $IP6TABLES_PATH -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface -j MASQUERADE;"
-            # 允许从 WireGuard 子网出去的流量
-            postup_rules="${postup_rules} $IP6TABLES_PATH -A FORWARD -i wg0 -j ACCEPT;"
-            # 允许已建立连接的流量返回
-            postup_rules="${postup_rules} $IP6TABLES_PATH -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;"
-            predown_rules="${predown_rules} $IP6TABLES_PATH -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface -j MASQUERADE;"
-            predown_rules="${predown_rules} $IP6TABLES_PATH -D FORWARD -i wg0 -j ACCEPT; $IP6TABLES_PATH -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;"
-        fi
+    if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
+        postup_rules="$IPTABLES_PATH -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
+        predown_rules="$IPTABLES_PATH -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
+    fi
+    if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
+        postup_rules="${postup_rules} $IP6TABLES_PATH -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE;"
+        postup_rules="${postup_rules} $IP6TABLES_PATH -A FORWARD -i wg0 -j ACCEPT;"
+        postup_rules="${postup_rules} $IP6TABLES_PATH -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;"
+        predown_rules="${predown_rules} $IP6TABLES_PATH -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE;"
+        predown_rules="${predown_rules} $IP6TABLES_PATH -D FORWARD -i wg0 -j ACCEPT; $IP6TABLES_PATH -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;"
     fi
 
     if [ "$use_udp2raw" = "y" ]; then
