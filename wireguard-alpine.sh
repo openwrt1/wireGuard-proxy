@@ -209,7 +209,7 @@ wireguard_install(){
         net_interface_ipv6=$(ip -o -6 route show to default | awk '{print $5}' | head -n1)
         if [ -z "$net_interface_ipv6" ]; then
             # Fallback for systems without a default IPv6 route but with a global IPv6 address
-            net_interface_ipv6=$(ip -6 addr show scope global | grep -oP 'dev \K[^ ]+' | head -n1)
+            net_interface_ipv6=$(ip -6 addr show scope global | grep -oE 'dev [^ ]+' | awk '{print $2}' | head -n1)
         fi
         if [ -z "$net_interface_ipv6" ]; then error_exit "无法自动检测到有效的 IPv6 主网络接口。" $LINENO; fi
         echo "检测到 IPv6 主网络接口为: $net_interface_ipv6"
@@ -460,7 +460,7 @@ add_new_client() {
 
     if [ "$IP_MODE" = "ipv4" ] || [ "$IP_MODE" = "dual" ]; then
         local last_ip_octet next_ip_octet
-        last_ip_octet=$(grep -oP '10\.0\.0\.\K[0-9]+' /etc/wireguard/wg0.conf | sort -n | tail -1 || echo 1)
+        last_ip_octet=$(grep -o '10\.0\.0\.[0-9]*' /etc/wireguard/wg0.conf | cut -d'.' -f4 | sort -n | tail -1 || echo 1)
         next_ip_octet=$((last_ip_octet + 1))
         if [ "$next_ip_octet" -gt 254 ]; then error_exit "IPv4 地址池已满。" $LINENO; fi
         new_client_ip_v4="10.0.0.${next_ip_octet}"
@@ -469,7 +469,7 @@ add_new_client() {
     fi
     if [ "$IP_MODE" = "ipv6" ] || [ "$IP_MODE" = "dual" ]; then
         local last_ip_octet next_ip_octet
-        last_ip_octet=$(grep -oP 'fd86:ea04:1111::\K[0-9a-fA-F]+' /etc/wireguard/wg0.conf | sort -n | tail -1 || echo 1)
+        last_ip_octet=$(grep -o 'fd86:ea04:1111::[0-9a-fA-F]*' /etc/wireguard/wg0.conf | cut -d':' -f5 | sort -n | tail -1 || echo 1)
         next_ip_octet=$((last_ip_octet + 1))
         new_client_ip_v6="fd86:ea04:1111::${next_ip_octet}"
         peer_allowed_ips=${peer_allowed_ips:+"$peer_allowed_ips, "}"$new_client_ip_v6/128"
@@ -548,7 +548,7 @@ delete_client() {
 
     echo "可用的客户端配置:"
     local CLIENTS
-    mapfile -t CLIENTS < <(find /etc/wireguard/ -name "*.conf" -printf "%f\n" | sed 's/\.conf$//' | grep -v '^wg0$' || true)
+    mapfile -t CLIENTS < <(find /etc/wireguard/ -name "*.conf" -exec basename {} .conf \; | grep -v '^wg0$' || true)
     if [ ${#CLIENTS[@]} -eq 0 ]; then echo "没有找到任何客户端。"; exit 0; fi
     printf '%s\n' "${CLIENTS[@]}"
 
