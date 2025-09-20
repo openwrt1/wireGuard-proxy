@@ -103,13 +103,13 @@ display_udp2raw_info() {
 
     if [ -n "$tcp_port_v4" ]; then
         echo -e "\033[1;32m--- IPv4 连接命令 (服务器端口: $tcp_port_v4) ---\033[0m"
-        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r $server_ipv4:$tcp_port_v4 -k \"$udp2raw_password\" --raw-mode easyfaketcp --cipher-mode xor"
+        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r $server_ipv4:$tcp_port_v4 -k \"$udp2raw_password\" --raw-mode easyfaketcp --cipher-mode xor --dev <物理网卡名>"
         echo ""
     fi
 
     if [ -n "$tcp_port_v6" ]; then
         echo -e "\033[1;32m--- IPv6 连接命令 (服务器端口: $tcp_port_v6) ---\033[0m"
-        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r [$server_ipv6]:$tcp_port_v6 -k \"$udp2raw_password\" --raw-mode easyfaketcp --cipher-mode xor"
+        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r [$server_ipv6]:$tcp_port_v6 -k \"$udp2raw_password\" --raw-mode easyfaketcp --cipher-mode xor --dev <物理网卡名>"
         echo ""
     fi
 
@@ -247,7 +247,7 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 EOF
-            postup_rules="${postup_rules} ! iptables -C INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null && iptables -A INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT;"
+            postup_rules="${postup_rules} ! iptables -C INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null && iptables -I INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT;"
             predown_rules="${predown_rules} iptables -D INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null || true;"
             systemctl daemon-reload
             systemctl enable udp2raw-ipv4
@@ -269,7 +269,7 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 EOF
-            postup_rules="${postup_rules} ! ip6tables -C INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null && ip6tables -A INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT;"
+            postup_rules="${postup_rules} ! ip6tables -C INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null && ip6tables -I INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT;"
             predown_rules="${predown_rules} ip6tables -D INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null || true;"
             systemctl daemon-reload
             systemctl enable udp2raw-ipv6
@@ -285,7 +285,7 @@ EOF
             echo "USE_UDP2RAW=false"
             echo "WG_PORT=$wg_port"
         } >> "$PARAMS_FILE"
-        postup_rules="! iptables -C INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null && iptables -A INPUT -p udp --dport $wg_port -j ACCEPT;"
+        postup_rules="! iptables -C INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null && iptables -I INPUT -p udp --dport $wg_port -j ACCEPT;"
         predown_rules="iptables -D INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null || true;"
         
         if [ "$ip_mode" = "ipv4" ]; then client_endpoint="$public_ipv4:$wg_port"; fi
@@ -310,8 +310,8 @@ EOF
     fi
     if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
         postup_rules="${postup_rules} ! ip6tables -t nat -C POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null && ip6tables -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE;"
-        postup_rules="${postup_rules} ! ip6tables -C FORWARD -i wg0 -j ACCEPT 2>/dev/null && ip6tables -A FORWARD -i wg0 -j ACCEPT;"
-        postup_rules="${postup_rules} ! ip6tables -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null && ip6tables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;"
+        postup_rules="${postup_rules} ! ip6tables -C FORWARD -i wg0 -j ACCEPT 2>/dev/null && ip6tables -I FORWARD -i wg0 -j ACCEPT;"
+        postup_rules="${postup_rules} ! ip6tables -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null && ip6tables -I FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;"
         predown_rules="${predown_rules} ip6tables -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null || true;"
         predown_rules="${predown_rules} ip6tables -D FORWARD -i wg0 -j ACCEPT 2>/dev/null || true; ip6tables -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true;"
     fi

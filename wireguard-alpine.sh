@@ -104,13 +104,13 @@ display_udp2raw_info() {
 
     if [ -n "$tcp_port_v4" ]; then
         printf "\033[1;32m--- IPv4 连接命令 (服务器端口: %s) ---\033[0m\n" "$tcp_port_v4"
-        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r $server_ipv4:$tcp_port_v4 -k \"$udp2raw_password\" --raw-mode easyfaketcp --cipher-mode xor"
+        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r $server_ipv4:$tcp_port_v4 -k \"$udp2raw_password\" --raw-mode easyfaketcp --cipher-mode xor --dev <物理网卡名>"
         echo ""
     fi
 
     if [ -n "$tcp_port_v6" ]; then
         printf "\033[1;32m--- IPv6 连接命令 (服务器端口: %s) ---\033[0m\n" "$tcp_port_v6"
-        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r [$server_ipv6]:$tcp_port_v6 -k \"$udp2raw_password\" --raw-mode easyfaketcp --cipher-mode xor"
+        echo "./<udp2raw_binary> -c -l 127.0.0.1:29999 -r [$server_ipv6]:$tcp_port_v6 -k \"$udp2raw_password\" --raw-mode easyfaketcp --cipher-mode xor --dev <物理网卡名>"
         echo ""
     fi
 
@@ -226,8 +226,8 @@ wireguard_install(){
     fi
     if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
         postup_rules="${postup_rules} ! $IP6TABLES_PATH -t nat -C POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null && $IP6TABLES_PATH -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE;"
-        postup_rules="${postup_rules} ! $IP6TABLES_PATH -C FORWARD -i wg0 -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -A FORWARD -i wg0 -j ACCEPT;"
-        postup_rules="${postup_rules} ! $IP6TABLES_PATH -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;"
+        postup_rules="${postup_rules} ! $IP6TABLES_PATH -C FORWARD -i wg0 -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -I FORWARD -i wg0 -j ACCEPT;"
+        postup_rules="${postup_rules} ! $IP6TABLES_PATH -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -I FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;"
         predown_rules="${predown_rules} $IP6TABLES_PATH -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null || true;"
         predown_rules="${predown_rules} $IP6TABLES_PATH -D FORWARD -i wg0 -j ACCEPT 2>/dev/null || true; $IP6TABLES_PATH -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true;"
     fi
@@ -261,7 +261,7 @@ wireguard_install(){
             read -r -p "请输入 udp2raw 的 IPv4 TCP 端口 [默认: 39001]: " tcp_port_v4
             tcp_port_v4=${tcp_port_v4:-39001}
             echo "TCP_PORT_V4=$tcp_port_v4" >> "$PARAMS_FILE"
-            postup_rules="${postup_rules} ! $IPTABLES_PATH -C INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null && $IPTABLES_PATH -A INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT;"
+            postup_rules="${postup_rules} ! $IPTABLES_PATH -C INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null && $IPTABLES_PATH -I INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT;"
             predown_rules="${predown_rules} $IPTABLES_PATH -D INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null || true;"
             cat > /etc/init.d/udp2raw-ipv4 <<-EOF
 #!/sbin/openrc-run
@@ -284,7 +284,7 @@ EOF
             read -r -p "请输入 udp2raw 的 IPv6 TCP 端口 [默认: 39002]: " tcp_port_v6
             tcp_port_v6=${tcp_port_v6:-39002}
             echo "TCP_PORT_V6=$tcp_port_v6" >> "$PARAMS_FILE"
-            postup_rules="${postup_rules} ! $IP6TABLES_PATH -C INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -A INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT;"
+            postup_rules="${postup_rules} ! $IP6TABLES_PATH -C INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -I INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT;"
             predown_rules="${predown_rules} $IP6TABLES_PATH -D INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null || true;"
             cat > /etc/init.d/udp2raw-ipv6 <<-EOF
 #!/sbin/openrc-run
@@ -312,7 +312,7 @@ EOF
             echo "USE_UDP2RAW=false";
             echo "WG_PORT=$wg_port";
         } >> "$PARAMS_FILE"
-        postup_rules="${postup_rules} ! $IPTABLES_PATH -C INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null && $IPTABLES_PATH -A INPUT -p udp --dport $wg_port -j ACCEPT;"
+        postup_rules="${postup_rules} ! $IPTABLES_PATH -C INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null && $IPTABLES_PATH -I INPUT -p udp --dport $wg_port -j ACCEPT;"
         predown_rules="${predown_rules} $IPTABLES_PATH -D INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null || true;"
         
         if [ "$ip_mode" = "ipv4" ]; then client_endpoint="$public_ipv4:$wg_port"; fi
