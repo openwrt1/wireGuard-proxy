@@ -333,14 +333,26 @@ EOF
     if [ "$ip_mode" = "ipv6" ]; then client_allowed_ips="::/0"; fi
 
 	echo "正在创建服务器配置文件 wg0.conf..."
+
+    # 创建 PostUp 和 PreDown 脚本，以解决 wg-quick 无法处理复杂单行命令的问题
+    cat > /etc/wireguard/wg-up.sh <<-EOF
+#!/bin/bash
+$postup_rules
+EOF
+    cat > /etc/wireguard/wg-down.sh <<-EOF
+#!/bin/bash
+$predown_rules
+EOF
+    chmod +x /etc/wireguard/wg-up.sh /etc/wireguard/wg-down.sh
+
 	cat > /etc/wireguard/wg0.conf <<-EOF
 		[Interface]
 		PrivateKey = $s1
 		Address = $server_address
 		ListenPort = $wg_port
 		MTU = 1420
-        PostUp = $postup_rules
-        PreDown = $predown_rules
+        PostUp = /etc/wireguard/wg-up.sh
+        PreDown = /etc/wireguard/wg-down.sh
 		[Peer]
 		# Client: client
 		PublicKey = $c2
