@@ -147,9 +147,9 @@ wireguard_install(){
     fi
 
     local use_udp2raw
-    read -r -p "是否启用 TCP 伪装 (udp2raw)？[y/N]: " use_udp2raw
+    read -r -p "是否启用 TCP 伪装 (udp2raw)？[Y/n]: " use_udp2raw
     use_udp2raw=$(echo "$use_udp2raw" | tr '[:upper:]' '[:lower:]')
-
+    [[ -z "$use_udp2raw" ]] && use_udp2raw="y"
 	echo "正在更新软件包列表..."
 	apt-get update
 
