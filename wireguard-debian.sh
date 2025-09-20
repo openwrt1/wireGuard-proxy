@@ -635,7 +635,7 @@ start_menu(){
 	echo "7. 优化系统 (开启 BBR)"
 	echo "8. 退出脚本"
 	echo
-    local num
+	local num
 	read -r -p "请输入数字 [1-8]: " num
 	case "$num" in
 	1) wireguard_install ;;
