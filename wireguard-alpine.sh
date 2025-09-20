@@ -223,7 +223,9 @@ wireguard_install(){
     if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
         # 检查规则是否存在，不存在则添加
         postup_rules="! $IPTABLES_PATH -t nat -C POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null && $IPTABLES_PATH -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE"
-        predown_rules="$IPTABLES_PATH -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null || true"
+        postup_rules="${postup_rules:+$postup_rules\n}! $IPTABLES_PATH -C FORWARD -i wg0 -j ACCEPT 2>/dev/null && $IPTABLES_PATH -I FORWARD -i wg0 -j ACCEPT"
+        postup_rules="${postup_rules:+$postup_rules\n}! $IPTABLES_PATH -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null && $IPTABLES_PATH -I FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
+        predown_rules="$IPTABLES_PATH -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null || true\n$IPTABLES_PATH -D FORWARD -i wg0 -j ACCEPT 2>/dev/null || true\n$IPTABLES_PATH -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true"
     fi
     if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
         postup_rules="${postup_rules:+$postup_rules\n}! $IP6TABLES_PATH -t nat -C POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null && $IP6TABLES_PATH -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE"
