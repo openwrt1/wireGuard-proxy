@@ -450,6 +450,11 @@ wireguard_uninstall() {
     set +e
     wg-quick down wg0 &>/dev/null || true
 	systemctl stop wg-quick@wg0 && systemctl disable wg-quick@wg0
+    # 强制移除任何残留的 wg0 转发规则
+    if command -v iptables-save &>/dev/null; then
+        iptables-save | grep -- '-i wg0' | sed 's/^-A/-D/' | xargs -rL1 iptables &>/dev/null
+        ip6tables-save | grep -- '-i wg0' | sed 's/^-A/-D/' | xargs -rL1 ip6tables &>/dev/null
+    fi
     systemctl stop udp2raw-ipv4 && systemctl disable udp2raw-ipv4
     systemctl stop udp2raw-ipv6 && systemctl disable udp2raw-ipv6
     cleanup_iptables_chains "iptables"

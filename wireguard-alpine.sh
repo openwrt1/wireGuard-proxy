@@ -497,6 +497,11 @@ wireguard_uninstall() {
     rc-update del udp2raw-ipv6 default &>/dev/null
     wg-quick down wg0 &>/dev/null || true
     ip link delete wg0 &>/dev/null || true
+    # 强制移除任何残留的 wg0 转发规则
+    if command -v iptables-save &>/dev/null; then
+        iptables-save | grep -- '-i wg0' | sed 's/^-A/-D/' | xargs -rL1 iptables &>/dev/null
+        ip6tables-save | grep -- '-i wg0' | sed 's/^-A/-D/' | xargs -rL1 ip6tables &>/dev/null
+    fi
     cleanup_iptables_chains "iptables"
     cleanup_iptables_chains "ip6tables"
     set -e
