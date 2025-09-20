@@ -448,42 +448,6 @@ EOF
     fi
 }
 
-# 智能清理 iptables 链的辅助函数
-cleanup_iptables_chains() {
-    local ipt_cmd=$1
-    # Alpine 的 mapfile 功能可能受限，改用更通用的 read -a
-    local chains_to_delete
-    read -r -a chains_to_delete < <(eval "$ipt_cmd-save" | grep -oP 'udp2rawDwrW_[a-f0-9]+_C0' | uniq | tr '\n' ' ')
-
-    if [ ${#chains_to_delete[@]} -gt 0 ]; then
-        printf "\n检测到以下由 udp2raw 创建的 %s 链：\n" "$ipt_cmd"
-        printf "  - %s\n" "${chains_to_delete[@]}"
-        read -r -p "是否要删除这些规则和链? [y/N]: " confirm
-        if [[ "$confirm" =~ ^[yY]$ ]]; then
-            for chain in "${chains_to_delete[@]}"; do
-                # 删除跳转到该链的规则
-                "$ipt_cmd-save" | grep -- "-j $chain" | sed -e 's/^-A/-D/' | xargs -rL1 "$ipt_cmd" &>/dev/null
-                # 清空并删除该链
-                "$ipt_cmd" -F "$chain" &>/dev/null
-                "$ipt_cmd" -X "$chain" &>/dev/null
-            done
-
-            # 验证清理结果
-            local remaining_chains
-            remaining_chains=$("$ipt_cmd-save" | grep -oP 'udp2rawDwrW_[a-f0-9]+_C0' | uniq)
-            if [ -z "$remaining_chains" ]; then
-                printf "✓ %s udp2raw 规则清理成功。\n" "$ipt_cmd"
-            else
-                printf "✗ %s udp2raw 规则清理失败，仍有残留。\n" "$ipt_cmd"
-            fi
-        else
-            echo "已取消删除操作。"
-        fi
-    else
-        printf "✓ 未找到 %s udp2raw 残留规则。\n" "$ipt_cmd"
-    fi
-}
-
 # 卸载 WireGuard
 wireguard_uninstall() {
     set +e
@@ -497,13 +461,31 @@ wireguard_uninstall() {
     rc-update del udp2raw-ipv6 default &>/dev/null
     wg-quick down wg0 &>/dev/null || true
     ip link delete wg0 &>/dev/null || true
-    # 强制移除任何残留的 wg0 转发规则
+
+    # --- 全自动防火墙清理 ---
+    echo "正在清理防火墙残留规则..."
     if command -v iptables-save &>/dev/null; then
-        iptables-save | grep -- '-i wg0' | sed 's/^-A/-D/' | xargs -rL1 iptables &>/dev/null
-        ip6tables-save | grep -- '-i wg0' | sed 's/^-A/-D/' | xargs -rL1 ip6tables &>/dev/null
+        # 1. 清理 wg0 相关规则
+        iptables-save | grep -E 'wg0' | sed 's/^-A/-D/' | xargs -rL1 iptables &>/dev/null
+        ip6tables-save | grep -E 'wg0' | sed 's/^-A/-D/' | xargs -rL1 ip6tables &>/dev/null
+
+        # 2. 清理 udp2raw 相关的 ACCEPT 规则 (假设端口在 39001-39002 范围)
+        iptables-save | grep -E 'tcp .* dpt:3900[1-2]' | grep 'ACCEPT' | sed 's/^-A/-D/' | xargs -rL1 iptables &>/dev/null
+        ip6tables-save | grep -E 'tcp .* dpt:3900[1-2]' | grep 'ACCEPT' | sed 's/^-A/-D/' | xargs -rL1 ip6tables &>/dev/null
+
+        # 3. 智能清理 udp2raw 自身创建的 DROP 链
+        iptables-save | grep -oP 'udp2rawDwrW_[a-f0-9]+_C0' | uniq | while read -r chain; do
+            iptables-save | grep "\-j $chain" | sed 's/^-A/-D/' | xargs -rL1 iptables &>/dev/null
+            iptables -F "$chain" &>/dev/null && iptables -X "$chain" &>/dev/null
+        done
+        ip6tables-save | grep -oP 'udp2rawDwrW_[a-f0-9]+_C0' | uniq | while read -r chain; do
+            ip6tables-save | grep "\-j $chain" | sed 's/^-A/-D/' | xargs -rL1 ip6tables &>/dev/null
+            ip6tables -F "$chain" &>/dev/null && ip6tables -X "$chain" &>/dev/null
+        done
+        echo "✓ 防火墙规则清理完毕。"
     fi
-    cleanup_iptables_chains "iptables"
-    cleanup_iptables_chains "ip6tables"
+    # --- 清理结束 ---
+
     set -e
 	# 只卸载 WireGuard 和 qrencode 相关的特定包。
 	# 不再卸载 curl, iptables, ip6tables, bash 等通用组件，以避免破坏系统其他部分。
@@ -559,7 +541,7 @@ add_new_client() {
 
     local server_public_key
     server_public_key=$(cat spublickey)
-    
+
     local client_endpoint client_mtu client_dns=""
     if [ "$USE_UDP2RAW" = "true" ]; then
         client_endpoint="127.0.0.1:29999"
@@ -607,7 +589,7 @@ add_new_client() {
     printf "\n配置文件内容:\n"
     cat "/etc/wireguard/${client_name}.conf"
     echo "------------------------------------------------------"
-    
+
     if [ "$USE_UDP2RAW" = "true" ]; then
         echo "提醒: 您的服务正使用 udp2raw，新客户端也需按以下信息配置。"
         display_udp2raw_info "$SERVER_IPV4" "$SERVER_IPV6" "$TCP_PORT_V4" "$TCP_PORT_V6" "$UDP2RAW_PASSWORD"
@@ -635,13 +617,13 @@ delete_client() {
     if [ -z "$client_pub_key" ]; then error_exit "无法在 wg0.conf 中找到客户端 ${client_name} 的公钥。" $LINENO; fi
 
     wg set wg0 peer "$client_pub_key" remove
-    
+
     # 使用 sed 删除对应的 [Peer] 块，更健壮
     sed -i "/^# Client: ${client_name}$/,/^$/d" /etc/wireguard/wg0.conf
-    
+
     # 保存当前接口的运行配置，确保与文件同步
     wg-quick save wg0 &>/dev/null || true
-    
+
     rm -f "/etc/wireguard/${client_name}.conf"
 
     printf "🎉 客户端 '%s' 已成功删除。\n" "$client_name"
@@ -672,7 +654,7 @@ list_clients() {
 # 显示 Udp2raw 配置
 show_udp2raw_config() {
     if [ ! -f /etc/wireguard/params ]; then error_exit "WireGuard 尚未安装或配置文件不完整。" $LINENO; fi
-    
+
     local IP_MODE SERVER_IPV4 SERVER_IPV6 USE_UDP2RAW WG_PORT TCP_PORT_V4 TCP_PORT_V6 UDP2RAW_PASSWORD
     # shellcheck source=/etc/wireguard/params
     source /etc/wireguard/params

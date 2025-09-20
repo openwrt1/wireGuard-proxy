@@ -129,6 +129,7 @@ wireguard_install(){
     fi
 
     # IP 模式选择
+    local ip_mode
     echo "请选择服务器的 IP 模式:"
     echo "  1) IPv4 Only (仅监听 IPv4)"
     echo "  2) IPv6 Only (仅监听 IPv6)"
@@ -145,6 +146,7 @@ wireguard_install(){
         echo -e "\033[1;33m警告: 混合模式在某些网络环境下可能导致客户端连接混乱或速度不稳定。\033[0m"
     fi
 
+    local use_udp2raw
     read -r -p "是否启用 TCP 伪装 (udp2raw)？[y/N]: " use_udp2raw
     use_udp2raw=$(echo "$use_udp2raw" | tr '[:upper:]' '[:lower:]')
 
@@ -159,6 +161,7 @@ wireguard_install(){
 	mkdir -p /etc/wireguard && chmod 700 /etc/wireguard
 	cd /etc/wireguard || exit 1
 
+    local s1 s2 c1 c2
 	wg genkey | tee sprivatekey | wg pubkey > spublickey
 	wg genkey | tee cprivatekey | wg pubkey > cpublickey
 	chmod 600 sprivatekey cprivatekey
@@ -176,7 +179,7 @@ wireguard_install(){
     if [ "$ip_mode" = "dual" ] && [ -z "$public_ipv4" ] && [ -z "$public_ipv6" ]; then error_exit "无法获取任何公网 IP 地址。" $LINENO; fi
     echo "检测到 IPv4: ${public_ipv4:-N/A}"
     echo "检测到 IPv6: ${public_ipv6:-N/A}"
-    
+
 	echo "配置系统网络转发..."
     if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
         sed -i '/net.ipv4.ip_forward=1/s/^#//' /etc/sysctl.conf
@@ -205,6 +208,33 @@ wireguard_install(){
         if [ -z "$net_interface" ]; then error_exit "无法自动检测到有效的 IPv4 主网络接口。" $LINENO; fi
         echo "检测到 IPv4 主网络接口为: $net_interface"
     fi
+    if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
+        net_interface_ipv6=$(ip -o -6 route show to default | awk '{print $5}' | head -n1)
+        if [ -z "$net_interface_ipv6" ]; then
+            # Fallback for systems without a default IPv6 route but with a global IPv6 address
+            net_interface_ipv6=$(ip -6 addr show scope global | grep -oP 'dev \K[^ ]+' | head -n1)
+        fi
+        if [ -z "$net_interface_ipv6" ]; then error_exit "无法自动检测到有效的 IPv6 主网络接口。" $LINENO; fi
+        echo "检测到 IPv6 主网络接口为: $net_interface_ipv6"
+    fi
+
+    local IPTABLES_PATH IP6TABLES_PATH
+    IPTABLES_PATH=$(command -v iptables)
+    IP6TABLES_PATH=$(command -v ip6tables)
+
+    if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
+        # 检查规则是否存在，不存在则添加
+        postup_rules="! $IPTABLES_PATH -t nat -C POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null && $IPTABLES_PATH -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE"
+        predown_rules="$IPTABLES_PATH -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null || true"
+    fi
+    if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
+        postup_rules="${postup_rules:+$postup_rules\n}! $IP6TABLES_PATH -t nat -C POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null && $IP6TABLES_PATH -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE"
+        postup_rules="${postup_rules:+$postup_rules\n}! $IP6TABLES_PATH -C FORWARD -i wg0 -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -I FORWARD -i wg0 -j ACCEPT"
+        postup_rules="${postup_rules:+$postup_rules\n}! $IP6TABLES_PATH -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -I FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
+        predown_rules="${predown_rules:+$predown_rules\n}$IP6TABLES_PATH -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null || true"
+        predown_rules="${predown_rules:+$predown_rules\n}$IP6TABLES_PATH -D FORWARD -i wg0 -j ACCEPT 2>/dev/null || true\n$IP6TABLES_PATH -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true"
+    fi
+
     if [ "$use_udp2raw" = "y" ]; then
         client_mtu=1280
         udp2raw_password=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
@@ -214,6 +244,7 @@ wireguard_install(){
         } >> "$PARAMS_FILE"
 
         echo "正在下载并安装 udp2raw..."
+        local UDP2RAW_URL ARCH UDP2RAW_BINARY
         UDP2RAW_URL="https://github.com/wangyu-/udp2raw/releases/download/20230206.0/udp2raw_binaries.tar.gz"
         curl -L -o udp2raw_binaries.tar.gz "$UDP2RAW_URL"
         tar -xzf udp2raw_binaries.tar.gz
@@ -230,12 +261,12 @@ wireguard_install(){
         rm -f udp2raw_* version.txt udp2raw_binaries.tar.gz udp2raw_amd64 udp2raw_arm udp2raw_x86
         echo -e "\033[0;32m✓ Udp2raw 安装成功。\033[0m"
 
-        postup_rules=""
-        predown_rules=""
         if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
             read -r -p "请输入 udp2raw 的 IPv4 TCP 端口 [默认: 39001]: " tcp_port_v4
             tcp_port_v4=${tcp_port_v4:-39001}
             echo "TCP_PORT_V4=$tcp_port_v4" >> "$PARAMS_FILE"
+            postup_rules="${postup_rules:+$postup_rules\n}! $IPTABLES_PATH -C INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null && $IPTABLES_PATH -I INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT"
+            predown_rules="${predown_rules:+$predown_rules\n}$IPTABLES_PATH -D INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null || true"
             cat > /etc/systemd/system/udp2raw-ipv4.service <<-EOF
 [Unit]
 Description=udp2raw-tunnel server (IPv4)
@@ -247,17 +278,18 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 EOF
-            postup_rules="${postup_rules} ! iptables -C INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null && iptables -I INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT;"
-            predown_rules="${predown_rules} iptables -D INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null || true;"
             systemctl daemon-reload
             systemctl enable udp2raw-ipv4
             systemctl start udp2raw-ipv4
             echo -e "\033[0;32m✓ Udp2raw IPv4 服务已启动并设置开机自启。\033[0m"
         fi
+
         if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
             read -r -p "请输入 udp2raw 的 IPv6 TCP 端口 [默认: 39002]: " tcp_port_v6
             tcp_port_v6=${tcp_port_v6:-39002}
             echo "TCP_PORT_V6=$tcp_port_v6" >> "$PARAMS_FILE"
+            postup_rules="${postup_rules:+$postup_rules\n}! $IP6TABLES_PATH -C INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -I INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT"
+            predown_rules="${predown_rules:+$predown_rules\n}$IP6TABLES_PATH -D INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null || true"
             cat > /etc/systemd/system/udp2raw-ipv6.service <<-EOF
 [Unit]
 Description=udp2raw-tunnel server (IPv6)
@@ -269,25 +301,24 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 EOF
-            postup_rules="${postup_rules} ! ip6tables -C INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null && ip6tables -I INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT;"
-            predown_rules="${predown_rules} ip6tables -D INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null || true;"
             systemctl daemon-reload
             systemctl enable udp2raw-ipv6
             systemctl start udp2raw-ipv6
             echo -e "\033[0;32m✓ Udp2raw IPv6 服务已启动并设置开机自启。\033[0m"
         fi
+
         client_endpoint="127.0.0.1:29999"
     else
         read -r -p "请输入 WireGuard 的 UDP 端口 [默认: 39000]: " wg_port
         wg_port=${wg_port:-39000}
         client_mtu=1420
         {
-            echo "USE_UDP2RAW=false"
-            echo "WG_PORT=$wg_port"
+            echo "USE_UDP2RAW=false";
+            echo "WG_PORT=$wg_port";
         } >> "$PARAMS_FILE"
-        postup_rules="! iptables -C INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null && iptables -I INPUT -p udp --dport $wg_port -j ACCEPT"
-        predown_rules="iptables -D INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null || true"
-        
+        postup_rules="${postup_rules:+$postup_rules\n}! $IPTABLES_PATH -C INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null && $IPTABLES_PATH -I INPUT -p udp --dport $wg_port -j ACCEPT"
+        predown_rules="${predown_rules:+$predown_rules\n}$IPTABLES_PATH -D INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null || true"
+
         if [ "$ip_mode" = "ipv4" ]; then client_endpoint="$public_ipv4:$wg_port"; fi
         if [ "$ip_mode" = "ipv6" ]; then client_endpoint="[$public_ipv6]:$wg_port"; fi
         if [ "$ip_mode" = "dual" ]; then
@@ -295,28 +326,7 @@ EOF
         fi
     fi
 
-    if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
-        net_interface_ipv6=$(ip -o -6 route show to default | awk '{print $5}' | head -n1)
-        if [ -z "$net_interface_ipv6" ]; then
-            net_interface_ipv6=$(ip -6 addr show scope global | grep -oP 'dev \K[^ ]+' | head -n1)
-        fi
-        if [ -z "$net_interface_ipv6" ]; then error_exit "无法自动检测到有效的 IPv6 主网络接口。" $LINENO; fi
-        echo "检测到 IPv6 主网络接口为: $net_interface_ipv6"
-    fi
-
-    if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
-        postup_rules="${postup_rules:+$postup_rules\n}! iptables -t nat -C POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null && iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE"
-        predown_rules="${predown_rules:+$predown_rules\n}iptables -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null || true"
-    fi
-    if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
-        postup_rules="${postup_rules:+$postup_rules\n}! ip6tables -t nat -C POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null && ip6tables -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE"
-        postup_rules="${postup_rules:+$postup_rules\n}! ip6tables -C FORWARD -i wg0 -j ACCEPT 2>/dev/null && ip6tables -I FORWARD -i wg0 -j ACCEPT"
-        postup_rules="${postup_rules:+$postup_rules\n}! ip6tables -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null && ip6tables -I FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
-        predown_rules="${predown_rules:+$predown_rules\n}ip6tables -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null || true"
-        predown_rules="${predown_rules:+$predown_rules\n}ip6tables -D FORWARD -i wg0 -j ACCEPT 2>/dev/null || true\nip6tables -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true"
-    fi
-
-    server_address=""; client_address=""; client_dns=""; peer_allowed_ips=""
+    local server_address="" client_address="" client_dns="" peer_allowed_ips=""
     if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
         server_address="10.0.0.1/24"; client_address="10.0.0.2/24"; peer_allowed_ips="10.0.0.2/32"; client_dns="8.8.8.8"
     fi
@@ -411,54 +421,55 @@ EOF
     fi
 }
 
-# 智能清理 iptables 链的辅助函数
-cleanup_iptables_chains() {
-    local ipt_cmd=$1
-    local chains_to_delete
-    mapfile -t chains_to_delete < <("$ipt_cmd-save" | grep -oP 'udp2rawDwrW_[a-f0-9]+_C0' | uniq)
-
-    if [ ${#chains_to_delete[@]} -gt 0 ]; then
-        printf "\n检测到以下由 udp2raw 创建的 %s 链：\n" "$ipt_cmd"
-        printf "  - %s\n" "${chains_to_delete[@]}"
-        read -r -p "是否要删除这些规则和链? [y/N]: " confirm
-        if [[ "$confirm" =~ ^[yY]$ ]]; then
-            for chain in "${chains_to_delete[@]}"; do
-                # 删除跳转到该链的规则
-                "$ipt_cmd-save" | grep -- "-j $chain" | sed -e 's/^-A/-D/' | xargs -rL1 "$ipt_cmd" &>/dev/null
-                # 清空并删除该链
-                "$ipt_cmd" -F "$chain" &>/dev/null
-                "$ipt_cmd" -X "$chain" &>/dev/null
-            done
-
-            # 验证清理结果
-            local remaining_chains
-            remaining_chains=$("$ipt_cmd-save" | grep -oP 'udp2rawDwrW_[a-f0-9]+_C0' | uniq)
-            if [ -z "$remaining_chains" ]; then
-                printf "✓ %s udp2raw 规则清理成功。\n" "$ipt_cmd"
-            else
-                printf "✗ %s udp2raw 规则清理失败，仍有残留。\n" "$ipt_cmd"
-            fi
-        else
-            echo "已取消删除操作。"
-        fi
-    fi
-}
-
 # 卸载 WireGuard
 wireguard_uninstall() {
     echo "正在停止并卸载 WireGuard 及相关服务..."
     set +e
     wg-quick down wg0 &>/dev/null || true
 	systemctl stop wg-quick@wg0 && systemctl disable wg-quick@wg0
-    # 强制移除任何残留的 wg0 转发规则
-    if command -v iptables-save &>/dev/null; then
-        iptables-save | grep -- '-i wg0' | sed 's/^-A/-D/' | xargs -rL1 iptables &>/dev/null
-        ip6tables-save | grep -- '-i wg0' | sed 's/^-A/-D/' | xargs -rL1 ip6tables &>/dev/null
-    fi
     systemctl stop udp2raw-ipv4 && systemctl disable udp2raw-ipv4
     systemctl stop udp2raw-ipv6 && systemctl disable udp2raw-ipv6
-    cleanup_iptables_chains "iptables"
-    cleanup_iptables_chains "ip6tables"
+
+    # --- 全自动防火墙清理 ---
+    echo "正在清理防火墙残留规则..."
+    if command -v iptables-save &>/dev/null; then
+        # 1. 清理 wg0 相关规则
+        iptables-save | grep -E 'wg0' | sed 's/^-A/-D/' | xargs -rL1 iptables &>/dev/null
+        ip6tables-save | grep -E 'wg0' | sed 's/^-A/-D/' | xargs -rL1 ip6tables &>/dev/null
+
+        # 2. 清理 udp2raw 相关的 ACCEPT 规则 (假设端口在 39001-39002 范围)
+        iptables-save | grep -E 'tcp .* dpt:3900[1-2]' | grep 'ACCEPT' | sed 's/^-A/-D/' | xargs -rL1 iptables &>/dev/null
+        ip6tables-save | grep -E 'tcp .* dpt:3900[1-2]' | grep 'ACCEPT' | sed 's/^-A/-D/' | xargs -rL1 ip6tables &>/dev/null
+
+        # 3. 智能清理 udp2raw 自身创建的 DROP 链
+        iptables-save | grep -oP 'udp2rawDwrW_[a-f0-9]+_C0' | uniq | while read -r chain; do
+            iptables-save | grep "\-j $chain" | sed 's/^-A/-D/' | xargs -rL1 iptables &>/dev/null
+            iptables -F "$chain" &>/dev/null && iptables -X "$chain" &>/dev/null
+        done
+        ip6tables-save | grep -oP 'udp2rawDwrW_[a-f0-9]+_C0' | uniq | while read -r chain; do
+            ip6tables-save | grep "\-j $chain" | sed 's/^-A/-D/' | xargs -rL1 ip6tables &>/dev/null
+            ip6tables -F "$chain" &>/dev/null && ip6tables -X "$chain" &>/dev/null
+        done
+        echo "✓ 防火墙规则清理完毕。"
+    fi
+
+    # 4. 清理 iptables-persistent 配置文件，从根源解决问题
+    if [ -f /etc/iptables/rules.v4 ]; then
+        echo "*filter
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+COMMIT" > /etc/iptables/rules.v4
+    fi
+    if [ -f /etc/iptables/rules.v6 ]; then
+        echo "*filter
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+COMMIT" > /etc/iptables/rules.v6
+    fi
+    # --- 清理结束 ---
+
     set -e
 
 	apt-get remove --purge -y wireguard wireguard-tools qrencode &>/dev/null
@@ -476,6 +487,7 @@ add_new_client() {
     # shellcheck source=/etc/wireguard/params
     if [ -f "$PARAMS_FILE" ]; then source "$PARAMS_FILE"; else error_exit "params 文件不存在。" $LINENO; fi
 
+    local client_name
     read -r -p "请输入新客户端的名称: " client_name
     if [ -z "$client_name" ]; then error_exit "客户端名称不能为空。" $LINENO; fi
     if [ -f "/etc/wireguard/${client_name}.conf" ]; then error_exit "名为 ${client_name} 的客户端已存在。" $LINENO; fi
@@ -483,6 +495,7 @@ add_new_client() {
     local new_client_ip_v4 new_client_ip_v6 peer_allowed_ips client_address
 
     if [ "$IP_MODE" = "ipv4" ] || [ "$IP_MODE" = "dual" ]; then
+        local last_ip_octet next_ip_octet
         last_ip_octet=$(grep -oP '10\.0\.0\.\K[0-9]+' /etc/wireguard/wg0.conf | sort -n | tail -1 || echo 1)
         next_ip_octet=$((last_ip_octet + 1))
         if [ "$next_ip_octet" -gt 254 ]; then error_exit "IPv4 地址池已满。" $LINENO; fi
@@ -491,6 +504,7 @@ add_new_client() {
         client_address="$new_client_ip_v4/24"
     fi
     if [ "$IP_MODE" = "ipv6" ] || [ "$IP_MODE" = "dual" ]; then
+        local last_ip_octet next_ip_octet
         last_ip_octet=$(grep -oP 'fd86:ea04:1111::\K[0-9a-fA-F]+' /etc/wireguard/wg0.conf | sort -n | tail -1 || echo 1)
         next_ip_octet=$((last_ip_octet + 1))
         new_client_ip_v6="fd86:ea04:1111::${next_ip_octet}"
@@ -509,7 +523,7 @@ add_new_client() {
 
     local server_public_key
     server_public_key=$(cat spublickey)
-    
+
     local client_endpoint client_mtu client_dns=""
     if [ "$USE_UDP2RAW" = "true" ]; then
         client_endpoint="127.0.0.1:29999"
@@ -556,7 +570,7 @@ add_new_client() {
     echo -e "\n配置文件内容:"
     cat "/etc/wireguard/${client_name}.conf"
     echo "------------------------------------------------------"
-    
+
     if [ "$USE_UDP2RAW" = "true" ]; then
         echo "提醒: 您的服务正使用 udp2raw，新客户端也需按以下信息配置。"
         display_udp2raw_info "$SERVER_IPV4" "$SERVER_IPV6" "$TCP_PORT_V4" "$TCP_PORT_V6" "$UDP2RAW_PASSWORD"
@@ -568,10 +582,12 @@ delete_client() {
     if [ ! -f /etc/wireguard/wg0.conf ]; then error_exit "WireGuard 尚未安装。" $LINENO; fi
 
     echo "可用的客户端配置:"
+    local CLIENTS
     mapfile -t CLIENTS < <(find /etc/wireguard/ -name "*.conf" -printf "%f\n" | sed 's/\.conf$//' | grep -v '^wg0$' || true)
     if [ ${#CLIENTS[@]} -eq 0 ]; then echo "没有找到任何客户端。"; exit 0; fi
     printf '%s\n' "${CLIENTS[@]}"
 
+    local client_name
     read -r -p "请输入要删除的客户端名称: " client_name
     if [ -z "$client_name" ]; then error_exit "客户端名称不能为空。" $LINENO; fi
     if [[ ! " ${CLIENTS[*]} " == *" ${client_name} "* ]]; then error_exit "客户端 ${client_name} 不存在。" $LINENO; fi
@@ -581,6 +597,8 @@ delete_client() {
     if [ -z "$client_pub_key" ]; then error_exit "无法在 wg0.conf 中找到客户端 ${client_name} 的公钥。" $LINENO; fi
 
     wg set wg0 peer "$client_pub_key" remove
+
+    # 使用 sed 删除对应的 [Peer] 块
     sed -i "/^# Client: ${client_name}$/,/^$/d" /etc/wireguard/wg0.conf
 
     rm -f "/etc/wireguard/${client_name}.conf"
@@ -591,17 +609,19 @@ delete_client() {
 # 显示所有客户端配置
 list_clients() {
     if [ ! -d /etc/wireguard ]; then error_exit "WireGuard 尚未安装。" $LINENO; fi
+    local CLIENTS
     mapfile -t CLIENTS < <(find /etc/wireguard/ -name "*.conf" -printf "%f\n" | sed 's/\.conf$//' | grep -v '^wg0$' || true)
     if [ ${#CLIENTS[@]} -eq 0 ]; then echo "没有找到任何客户端配置。"; exit 0; fi
 
     echo "==================== 所有客户端配置 ===================="
     for client in "${CLIENTS[@]}"; do
         echo -e "\n--- 客户端: \033[1;32m$client\033[0m ---"
-        echo "配置文件路径: /etc/wireguard/${client}.conf"
+        local client_conf_path="/etc/wireguard/${client}.conf"
+        echo "配置文件路径: $client_conf_path"
         echo "二维码:"
-        qrencode -t ansiutf8 < "/etc/wireguard/${client}.conf"
+        qrencode -t ansiutf8 < "$client_conf_path"
         echo -e "\n配置文件内容:"
-        cat "/etc/wireguard/${client}.conf"
+        cat "$client_conf_path"
         echo "------------------------------------------------------"
     done
     echo "======================================================="
@@ -610,10 +630,11 @@ list_clients() {
 # 显示 Udp2raw 配置
 show_udp2raw_config() {
     if [ ! -f /etc/wireguard/params ]; then error_exit "WireGuard 尚未安装或配置文件不完整。" $LINENO; fi
-    
+
     local IP_MODE SERVER_IPV4 SERVER_IPV6 USE_UDP2RAW WG_PORT TCP_PORT_V4 TCP_PORT_V6 UDP2RAW_PASSWORD
     # shellcheck source=/etc/wireguard/params
     source /etc/wireguard/params
+
     if [ "$USE_UDP2RAW" = "true" ]; then
         display_udp2raw_info "$SERVER_IPV4" "$SERVER_IPV6" "$TCP_PORT_V4" "$TCP_PORT_V6" "$UDP2RAW_PASSWORD"
     else

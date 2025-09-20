@@ -153,10 +153,6 @@ wireguard_install(){
 	echo "正在更新软件包列表..."
 	apt-get update
 
-    # 预设 iptables-persistent 的 debconf 选项，避免安装时出现交互式弹窗
-    echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" | debconf-set-selections
-    echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" | debconf-set-selections
-
 	echo "正在安装 WireGuard 及相关工具..."
 	apt-get install -y wireguard qrencode curl
     echo -e "\033[0;32m✓ 核心工具安装成功。\033[0m"
@@ -426,54 +422,55 @@ EOF
     fi
 }
 
-# 智能清理 iptables 链的辅助函数
-cleanup_iptables_chains() {
-    local ipt_cmd=$1
-    local chains_to_delete
-    mapfile -t chains_to_delete < <("$ipt_cmd-save" | grep -oP 'udp2rawDwrW_[a-f0-9]+_C0' | uniq)
-
-    if [ ${#chains_to_delete[@]} -gt 0 ]; then
-        printf "\n检测到以下由 udp2raw 创建的 %s 链：\n" "$ipt_cmd"
-        printf "  - %s\n" "${chains_to_delete[@]}"
-        read -r -p "是否要删除这些规则和链? [y/N]: " confirm
-        if [[ "$confirm" =~ ^[yY]$ ]]; then
-            for chain in "${chains_to_delete[@]}"; do
-                # 删除跳转到该链的规则
-                "$ipt_cmd-save" | grep -- "-j $chain" | sed -e 's/^-A/-D/' | xargs -rL1 "$ipt_cmd" &>/dev/null
-                # 清空并删除该链
-                "$ipt_cmd" -F "$chain" &>/dev/null
-                "$ipt_cmd" -X "$chain" &>/dev/null
-            done
-
-            # 验证清理结果
-            local remaining_chains
-            remaining_chains=$("$ipt_cmd-save" | grep -oP 'udp2rawDwrW_[a-f0-9]+_C0' | uniq)
-            if [ -z "$remaining_chains" ]; then
-                printf "✓ %s udp2raw 规则清理成功。\n" "$ipt_cmd"
-            else
-                printf "✗ %s udp2raw 规则清理失败，仍有残留。\n" "$ipt_cmd"
-            fi
-        else
-            echo "已取消删除操作。"
-        fi
-    fi
-}
-
 # 卸载 WireGuard
 wireguard_uninstall() {
     echo "正在停止并卸载 WireGuard 及相关服务..."
     set +e
     wg-quick down wg0 &>/dev/null || true
 	systemctl stop wg-quick@wg0 && systemctl disable wg-quick@wg0
-    # 强制移除任何残留的 wg0 转发规则
-    if command -v iptables-save &>/dev/null; then
-        iptables-save | grep -- '-i wg0' | sed 's/^-A/-D/' | xargs -rL1 iptables &>/dev/null
-        ip6tables-save | grep -- '-i wg0' | sed 's/^-A/-D/' | xargs -rL1 ip6tables &>/dev/null
-    fi
     systemctl stop udp2raw-ipv4 && systemctl disable udp2raw-ipv4
     systemctl stop udp2raw-ipv6 && systemctl disable udp2raw-ipv6
-    cleanup_iptables_chains "iptables"
-    cleanup_iptables_chains "ip6tables"
+
+    # --- 全自动防火墙清理 ---
+    echo "正在清理防火墙残留规则..."
+    if command -v iptables-save &>/dev/null; then
+        # 1. 清理 wg0 相关规则
+        iptables-save | grep -E 'wg0' | sed 's/^-A/-D/' | xargs -rL1 iptables &>/dev/null
+        ip6tables-save | grep -E 'wg0' | sed 's/^-A/-D/' | xargs -rL1 ip6tables &>/dev/null
+
+        # 2. 清理 udp2raw 相关的 ACCEPT 规则 (假设端口在 39001-39002 范围)
+        iptables-save | grep -E 'tcp .* dpt:3900[1-2]' | grep 'ACCEPT' | sed 's/^-A/-D/' | xargs -rL1 iptables &>/dev/null
+        ip6tables-save | grep -E 'tcp .* dpt:3900[1-2]' | grep 'ACCEPT' | sed 's/^-A/-D/' | xargs -rL1 ip6tables &>/dev/null
+
+        # 3. 智能清理 udp2raw 自身创建的 DROP 链
+        iptables-save | grep -oP 'udp2rawDwrW_[a-f0-9]+_C0' | uniq | while read -r chain; do
+            iptables-save | grep "\-j $chain" | sed 's/^-A/-D/' | xargs -rL1 iptables &>/dev/null
+            iptables -F "$chain" &>/dev/null && iptables -X "$chain" &>/dev/null
+        done
+        ip6tables-save | grep -oP 'udp2rawDwrW_[a-f0-9]+_C0' | uniq | while read -r chain; do
+            ip6tables-save | grep "\-j $chain" | sed 's/^-A/-D/' | xargs -rL1 ip6tables &>/dev/null
+            ip6tables -F "$chain" &>/dev/null && ip6tables -X "$chain" &>/dev/null
+        done
+        echo "✓ 防火墙规则清理完毕。"
+    fi
+
+    # 4. 清理 iptables-persistent 配置文件，从根源解决问题
+    if [ -f /etc/iptables/rules.v4 ]; then
+        echo "*filter
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+COMMIT" > /etc/iptables/rules.v4
+    fi
+    if [ -f /etc/iptables/rules.v6 ]; then
+        echo "*filter
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+COMMIT" > /etc/iptables/rules.v6
+    fi
+    # --- 清理结束 ---
+
     set -e
 
 	apt-get remove --purge -y wireguard wireguard-tools qrencode &>/dev/null
