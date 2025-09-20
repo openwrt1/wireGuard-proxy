@@ -285,8 +285,8 @@ EOF
             echo "USE_UDP2RAW=false"
             echo "WG_PORT=$wg_port"
         } >> "$PARAMS_FILE"
-        postup_rules="! iptables -C INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null && iptables -I INPUT -p udp --dport $wg_port -j ACCEPT;"
-        predown_rules="iptables -D INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null || true;"
+        postup_rules="! iptables -C INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null && iptables -I INPUT -p udp --dport $wg_port -j ACCEPT"
+        predown_rules="iptables -D INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null || true"
         
         if [ "$ip_mode" = "ipv4" ]; then client_endpoint="$public_ipv4:$wg_port"; fi
         if [ "$ip_mode" = "ipv6" ]; then client_endpoint="[$public_ipv6]:$wg_port"; fi
@@ -305,15 +305,15 @@ EOF
     fi
 
     if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
-        postup_rules="${postup_rules} ! iptables -t nat -C POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null && iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
-        predown_rules="${predown_rules} iptables -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null || true;"
+        postup_rules="${postup_rules:+$postup_rules\n}! iptables -t nat -C POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null && iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE"
+        predown_rules="${predown_rules:+$predown_rules\n}iptables -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null || true"
     fi
     if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
-        postup_rules="${postup_rules} ! ip6tables -t nat -C POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null && ip6tables -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE;"
-        postup_rules="${postup_rules} ! ip6tables -C FORWARD -i wg0 -j ACCEPT 2>/dev/null && ip6tables -I FORWARD -i wg0 -j ACCEPT;"
-        postup_rules="${postup_rules} ! ip6tables -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null && ip6tables -I FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;"
-        predown_rules="${predown_rules} ip6tables -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null || true;"
-        predown_rules="${predown_rules} ip6tables -D FORWARD -i wg0 -j ACCEPT 2>/dev/null || true; ip6tables -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true;"
+        postup_rules="${postup_rules:+$postup_rules\n}! ip6tables -t nat -C POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null && ip6tables -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE"
+        postup_rules="${postup_rules:+$postup_rules\n}! ip6tables -C FORWARD -i wg0 -j ACCEPT 2>/dev/null && ip6tables -I FORWARD -i wg0 -j ACCEPT"
+        postup_rules="${postup_rules:+$postup_rules\n}! ip6tables -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null && ip6tables -I FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
+        predown_rules="${predown_rules:+$predown_rules\n}ip6tables -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null || true"
+        predown_rules="${predown_rules:+$predown_rules\n}ip6tables -D FORWARD -i wg0 -j ACCEPT 2>/dev/null || true\nip6tables -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true"
     fi
 
     server_address=""; client_address=""; client_dns=""; peer_allowed_ips=""
@@ -337,11 +337,11 @@ EOF
     # 创建 PostUp 和 PreDown 脚本，以解决 wg-quick 无法处理复杂单行命令的问题
     cat > /etc/wireguard/wg-up.sh <<-EOF
 #!/bin/bash
-$postup_rules
+$(echo -e "$postup_rules")
 EOF
     cat > /etc/wireguard/wg-down.sh <<-EOF
 #!/bin/bash
-$predown_rules
+$(echo -e "$predown_rules")
 EOF
     chmod +x /etc/wireguard/wg-up.sh /etc/wireguard/wg-down.sh
 
