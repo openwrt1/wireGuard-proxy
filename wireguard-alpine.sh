@@ -220,15 +220,16 @@ wireguard_install(){
     IP6TABLES_PATH=$(command -v ip6tables)
 
     if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
-        postup_rules="$IPTABLES_PATH -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
-        predown_rules="$IPTABLES_PATH -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
+        # 检查规则是否存在，不存在则添加
+        postup_rules="! $IPTABLES_PATH -t nat -C POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null && $IPTABLES_PATH -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE;"
+        predown_rules="$IPTABLES_PATH -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null || true;"
     fi
     if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
-        postup_rules="${postup_rules} $IP6TABLES_PATH -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE;"
-        postup_rules="${postup_rules} $IP6TABLES_PATH -A FORWARD -i wg0 -j ACCEPT;"
-        postup_rules="${postup_rules} $IP6TABLES_PATH -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;"
-        predown_rules="${predown_rules} $IP6TABLES_PATH -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE;"
-        predown_rules="${predown_rules} $IP6TABLES_PATH -D FORWARD -i wg0 -j ACCEPT; $IP6TABLES_PATH -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;"
+        postup_rules="${postup_rules} ! $IP6TABLES_PATH -t nat -C POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null && $IP6TABLES_PATH -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE;"
+        postup_rules="${postup_rules} ! $IP6TABLES_PATH -C FORWARD -i wg0 -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -A FORWARD -i wg0 -j ACCEPT;"
+        postup_rules="${postup_rules} ! $IP6TABLES_PATH -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;"
+        predown_rules="${predown_rules} $IP6TABLES_PATH -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null || true;"
+        predown_rules="${predown_rules} $IP6TABLES_PATH -D FORWARD -i wg0 -j ACCEPT 2>/dev/null || true; $IP6TABLES_PATH -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true;"
     fi
 
     if [ "$use_udp2raw" = "y" ]; then
@@ -260,8 +261,8 @@ wireguard_install(){
             read -r -p "请输入 udp2raw 的 IPv4 TCP 端口 [默认: 39001]: " tcp_port_v4
             tcp_port_v4=${tcp_port_v4:-39001}
             echo "TCP_PORT_V4=$tcp_port_v4" >> "$PARAMS_FILE"
-            postup_rules="${postup_rules} $IPTABLES_PATH -A INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT;"
-            predown_rules="${predown_rules} $IPTABLES_PATH -D INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT;"
+            postup_rules="${postup_rules} ! $IPTABLES_PATH -C INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null && $IPTABLES_PATH -A INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT;"
+            predown_rules="${predown_rules} $IPTABLES_PATH -D INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null || true;"
             cat > /etc/init.d/udp2raw-ipv4 <<-EOF
 #!/sbin/openrc-run
 description="udp2raw-tunnel server (IPv4)"
@@ -283,8 +284,8 @@ EOF
             read -r -p "请输入 udp2raw 的 IPv6 TCP 端口 [默认: 39002]: " tcp_port_v6
             tcp_port_v6=${tcp_port_v6:-39002}
             echo "TCP_PORT_V6=$tcp_port_v6" >> "$PARAMS_FILE"
-            postup_rules="${postup_rules} $IP6TABLES_PATH -A INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT;"
-            predown_rules="${predown_rules} $IP6TABLES_PATH -D INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT;"
+            postup_rules="${postup_rules} ! $IP6TABLES_PATH -C INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -A INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT;"
+            predown_rules="${predown_rules} $IP6TABLES_PATH -D INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null || true;"
             cat > /etc/init.d/udp2raw-ipv6 <<-EOF
 #!/sbin/openrc-run
 description="udp2raw-tunnel server (IPv6)"
@@ -311,8 +312,8 @@ EOF
             echo "USE_UDP2RAW=false";
             echo "WG_PORT=$wg_port";
         } >> "$PARAMS_FILE"
-        postup_rules="${postup_rules} $IPTABLES_PATH -A INPUT -p udp --dport $wg_port -j ACCEPT;"
-        predown_rules="${predown_rules} $IPTABLES_PATH -D INPUT -p udp --dport $wg_port -j ACCEPT;"
+        postup_rules="${postup_rules} ! $IPTABLES_PATH -C INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null && $IPTABLES_PATH -A INPUT -p udp --dport $wg_port -j ACCEPT;"
+        predown_rules="${predown_rules} $IPTABLES_PATH -D INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null || true;"
         
         if [ "$ip_mode" = "ipv4" ]; then client_endpoint="$public_ipv4:$wg_port"; fi
         if [ "$ip_mode" = "ipv6" ]; then client_endpoint="[$public_ipv6]:$wg_port"; fi
@@ -416,6 +417,22 @@ EOF
 
     if [ "$use_udp2raw" = "y" ]; then
         display_udp2raw_info "$public_ipv4" "$public_ipv6" "$tcp_port_v4" "$tcp_port_v6" "$udp2raw_password"
+    fi
+
+    printf "\n💡 \033[1;36m提示: 您可以使用以下命令检查防火墙规则是否已正确加载。\033[0m\n"
+    if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
+        printf "  - 检查 IPv4 NAT 规则:   \033[0;32miptables -t nat -L POSTROUTING -v -n\033[0m\n"
+        if [ "$use_udp2raw" = "y" ]; then
+            printf "  - 检查 IPv4 入站规则:   \033[0;32miptables -L INPUT -v -n | grep --color=never -E 'dpt:%s'\033[0m\n" "$tcp_port_v4"
+        else
+            printf "  - 检查 IPv4 入站规则:   \033[0;32miptables -L INPUT -v -n | grep --color=never -E 'dpt:%s'\033[0m\n" "$wg_port"
+        fi
+    fi
+    if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
+        printf "  - 检查 IPv6 NAT 规则:   \033[0;32mip6tables -t nat -L POSTROUTING -v -n\033[0m\n"
+        if [ "$use_udp2raw" = "y" ] && [ -n "$tcp_port_v6" ]; then
+            printf "  - 检查 IPv6 入站规则:   \033[0;32mip6tables -L INPUT -v -n | grep --color=never -E 'dpt:%s'\033[0m\n" "$tcp_port_v6"
+        fi
     fi
 }
 
