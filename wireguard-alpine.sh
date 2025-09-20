@@ -448,6 +448,42 @@ EOF
     fi
 }
 
+# 智能清理 iptables 链的辅助函数
+cleanup_iptables_chains() {
+    local ipt_cmd=$1
+    # Alpine 的 mapfile 功能可能受限，改用更通用的 read -a
+    local chains_to_delete
+    read -r -a chains_to_delete < <(eval "$ipt_cmd-save" | grep -oP 'udp2rawDwrW_[a-f0-9]+_C0' | uniq | tr '\n' ' ')
+
+    if [ ${#chains_to_delete[@]} -gt 0 ]; then
+        printf "\n检测到以下由 udp2raw 创建的 %s 链：\n" "$ipt_cmd"
+        printf "  - %s\n" "${chains_to_delete[@]}"
+        read -r -p "是否要删除这些规则和链? [y/N]: " confirm
+        if [[ "$confirm" =~ ^[yY]$ ]]; then
+            for chain in "${chains_to_delete[@]}"; do
+                # 删除跳转到该链的规则
+                "$ipt_cmd-save" | grep -- "-j $chain" | sed -e 's/^-A/-D/' | xargs -rL1 "$ipt_cmd" &>/dev/null
+                # 清空并删除该链
+                "$ipt_cmd" -F "$chain" &>/dev/null
+                "$ipt_cmd" -X "$chain" &>/dev/null
+            done
+
+            # 验证清理结果
+            local remaining_chains
+            remaining_chains=$("$ipt_cmd-save" | grep -oP 'udp2rawDwrW_[a-f0-9]+_C0' | uniq)
+            if [ -z "$remaining_chains" ]; then
+                printf "✓ %s udp2raw 规则清理成功。\n" "$ipt_cmd"
+            else
+                printf "✗ %s udp2raw 规则清理失败，仍有残留。\n" "$ipt_cmd"
+            fi
+        else
+            echo "已取消删除操作。"
+        fi
+    else
+        printf "✓ 未找到 %s udp2raw 残留规则。\n" "$ipt_cmd"
+    fi
+}
+
 # 卸载 WireGuard
 wireguard_uninstall() {
     set +e
@@ -461,6 +497,8 @@ wireguard_uninstall() {
     rc-update del udp2raw-ipv6 default &>/dev/null
     wg-quick down wg0 &>/dev/null || true
     ip link delete wg0 &>/dev/null || true
+    cleanup_iptables_chains "iptables"
+    cleanup_iptables_chains "ip6tables"
     set -e
 	# 只卸载 WireGuard 和 qrencode 相关的特定包。
 	# 不再卸载 curl, iptables, ip6tables, bash 等通用组件，以避免破坏系统其他部分。
