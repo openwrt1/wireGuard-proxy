@@ -195,7 +195,7 @@ wireguard_install(){
         echo "SERVER_IPV6=${public_ipv6}"
     } > "$PARAMS_FILE"
 
-    local client_endpoint wg_port client_mtu postup_rules predown_rules tcp_port_v4 tcp_port_v6 udp2raw_password
+    local client_endpoint wg_port client_mtu postup_cmds predown_cmds tcp_port_v4 tcp_port_v6 udp2raw_password
     wg_port=$(rand_port)
 
     local net_interface net_interface_ipv6
@@ -207,7 +207,6 @@ wireguard_install(){
     if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
         net_interface_ipv6=$(ip -o -6 route show to default | awk '{print $5}' | head -n1)
         if [ -z "$net_interface_ipv6" ]; then
-            # Fallback for systems without a default IPv6 route but with a global IPv6 address
             net_interface_ipv6=$(ip -6 addr show scope global | grep -oE 'dev [^ ]+' | awk '{print $2}' | head -n1)
         fi
         if [ -z "$net_interface_ipv6" ]; then error_exit "无法自动检测到有效的 IPv6 主网络接口。" $LINENO; fi
@@ -218,19 +217,25 @@ wireguard_install(){
     IPTABLES_PATH=$(command -v iptables)
     IP6TABLES_PATH=$(command -v ip6tables)
 
+    # --- 构建 PostUp 和 PreDown 命令 ---
+    postup_cmds=""
+    predown_cmds=""
+
     if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
-        # 检查规则是否存在，不存在则添加
-        postup_rules="! $IPTABLES_PATH -t nat -C POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null && $IPTABLES_PATH -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE"
-        postup_rules="${postup_rules:+$postup_rules\n}! $IPTABLES_PATH -C FORWARD -i wg0 -j ACCEPT 2>/dev/null && $IPTABLES_PATH -I FORWARD -i wg0 -j ACCEPT"
-        postup_rules="${postup_rules:+$postup_rules\n}! $IPTABLES_PATH -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null && $IPTABLES_PATH -I FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
-        predown_rules="$IPTABLES_PATH -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE 2>/dev/null || true\n$IPTABLES_PATH -D FORWARD -i wg0 -j ACCEPT 2>/dev/null || true\n$IPTABLES_PATH -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true"
+        postup_cmds="${postup_cmds}PostUp = $IPTABLES_PATH -t nat -A POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE\n"
+        postup_cmds="${postup_cmds}PostUp = $IPTABLES_PATH -A FORWARD -i %i -j ACCEPT\n"
+        postup_cmds="${postup_cmds}PostUp = $IPTABLES_PATH -A FORWARD -o %i -j ACCEPT\n"
+        predown_cmds="${predown_cmds}PreDown = $IPTABLES_PATH -t nat -D POSTROUTING -s 10.0.0.0/24 -o $net_interface -j MASQUERADE\n"
+        predown_cmds="${predown_cmds}PreDown = $IPTABLES_PATH -D FORWARD -i %i -j ACCEPT\n"
+        predown_cmds="${predown_cmds}PreDown = $IPTABLES_PATH -D FORWARD -o %i -j ACCEPT\n"
     fi
     if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
-        postup_rules="${postup_rules:+$postup_rules\n}! $IP6TABLES_PATH -t nat -C POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null && $IP6TABLES_PATH -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE"
-        postup_rules="${postup_rules:+$postup_rules\n}! $IP6TABLES_PATH -C FORWARD -i wg0 -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -I FORWARD -i wg0 -j ACCEPT"
-        postup_rules="${postup_rules:+$postup_rules\n}! $IP6TABLES_PATH -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -I FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
-        predown_rules="${predown_rules:+$predown_rules\n}$IP6TABLES_PATH -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE 2>/dev/null || true"
-        predown_rules="${predown_rules:+$predown_rules\n}$IP6TABLES_PATH -D FORWARD -i wg0 -j ACCEPT 2>/dev/null || true\n$IP6TABLES_PATH -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true"
+        postup_cmds="${postup_cmds}PostUp = $IP6TABLES_PATH -t nat -A POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE\n"
+        postup_cmds="${postup_cmds}PostUp = $IP6TABLES_PATH -A FORWARD -i %i -j ACCEPT\n"
+        postup_cmds="${postup_cmds}PostUp = $IP6TABLES_PATH -A FORWARD -o %i -j ACCEPT\n"
+        predown_cmds="${predown_cmds}PreDown = $IP6TABLES_PATH -t nat -D POSTROUTING -s fd86:ea04:1111::/64 -o $net_interface_ipv6 -j MASQUERADE\n"
+        predown_cmds="${predown_cmds}PreDown = $IP6TABLES_PATH -D FORWARD -i %i -j ACCEPT\n"
+        predown_cmds="${predown_cmds}PreDown = $IP6TABLES_PATH -D FORWARD -o %i -j ACCEPT\n"
     fi
 
     if [ "$use_udp2raw" = "y" ]; then
@@ -262,8 +267,8 @@ wireguard_install(){
             read -r -p "请输入 udp2raw 的 IPv4 TCP 端口 [默认: 39001]: " tcp_port_v4
             tcp_port_v4=${tcp_port_v4:-39001}
             echo "TCP_PORT_V4=$tcp_port_v4" >> "$PARAMS_FILE"
-            postup_rules="${postup_rules:+$postup_rules\n}! $IPTABLES_PATH -C INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null && $IPTABLES_PATH -A INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT"
-            predown_rules="${predown_rules:+$predown_rules\n}$IPTABLES_PATH -D INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null || true"
+            postup_cmds="${postup_cmds}PostUp = $IPTABLES_PATH -A INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT\n"
+            predown_cmds="${predown_cmds}PreDown = $IPTABLES_PATH -D INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT\n"
             cat > /etc/init.d/udp2raw-ipv4 <<-EOF
 #!/sbin/openrc-run
 description="udp2raw-tunnel server (IPv4)"
@@ -285,8 +290,8 @@ EOF
             read -r -p "请输入 udp2raw 的 IPv6 TCP 端口 [默认: 39002]: " tcp_port_v6
             tcp_port_v6=${tcp_port_v6:-39002}
             echo "TCP_PORT_V6=$tcp_port_v6" >> "$PARAMS_FILE"
-            postup_rules="${postup_rules:+$postup_rules\n}! $IP6TABLES_PATH -C INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -A INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT"
-            predown_rules="${predown_rules:+$predown_rules\n}$IP6TABLES_PATH -D INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null || true"
+            postup_cmds="${postup_cmds}PostUp = $IP6TABLES_PATH -A INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT\n"
+            predown_cmds="${predown_cmds}PreDown = $IP6TABLES_PATH -D INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT\n"
             cat > /etc/init.d/udp2raw-ipv6 <<-EOF
 #!/sbin/openrc-run
 description="udp2raw-tunnel server (IPv6)"
@@ -313,8 +318,8 @@ EOF
             echo "USE_UDP2RAW=false";
             echo "WG_PORT=$wg_port";
         } >> "$PARAMS_FILE"
-        postup_rules="${postup_rules:+$postup_rules\n}! $IPTABLES_PATH -C INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null && $IPTABLES_PATH -I INPUT -p udp --dport $wg_port -j ACCEPT"
-        predown_rules="${predown_rules:+$predown_rules\n}$IPTABLES_PATH -D INPUT -p udp --dport $wg_port -j ACCEPT 2>/dev/null || true"
+        postup_cmds="${postup_cmds}PostUp = $IPTABLES_PATH -A INPUT -p udp --dport $wg_port -j ACCEPT\n"
+        predown_cmds="${predown_cmds}PreDown = $IPTABLES_PATH -D INPUT -p udp --dport $wg_port -j ACCEPT\n"
         
         if [ "$ip_mode" = "ipv4" ]; then client_endpoint="$public_ipv4:$wg_port"; fi
         if [ "$ip_mode" = "ipv6" ]; then client_endpoint="[$public_ipv6]:$wg_port"; fi
@@ -341,25 +346,14 @@ EOF
 
 	echo "正在创建服务器配置文件 wg0.conf..."
 
-    # 创建 PostUp 和 PreDown 脚本，以解决 wg-quick 无法处理复杂单行命令的问题
-    cat > /etc/wireguard/wg-up.sh <<-EOF
-#!/bin/bash
-$(echo -e "$postup_rules")
-EOF
-    cat > /etc/wireguard/wg-down.sh <<-EOF
-#!/bin/bash
-$(echo -e "$predown_rules")
-EOF
-    chmod +x /etc/wireguard/wg-up.sh /etc/wireguard/wg-down.sh
-
 	cat > /etc/wireguard/wg0.conf <<-EOF
 		[Interface]
 		PrivateKey = $s1
 		Address = $server_address
 		ListenPort = $wg_port
 		MTU = 1420
-        PostUp = /etc/wireguard/wg-up.sh
-        PreDown = /etc/wireguard/wg-down.sh
+$(echo -e "$postup_cmds" | sed '/^$/d')
+$(echo -e "$predown_cmds" | sed '/^$/d')
 
 		[Peer]
 		# Client: client
