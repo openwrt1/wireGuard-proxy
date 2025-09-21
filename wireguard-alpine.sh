@@ -153,8 +153,6 @@ wireguard_install(){
 	echo "正在更新软件包列表..."
 	apk update
 	echo "正在安装 WireGuard 及相关工具..."
-	# Alpine v3.15+ 默认使用 nftables, 但 wg-quick 的 PostUp 规则需要 iptables。
-    # 我们将安装 iptables, libqrencode-tools (二维码) 及其他依赖。
 	apk add --no-cache wireguard-tools curl iptables ip6tables bash libqrencode-tools
 
 	echo "正在创建 WireGuard 目录和密钥..."
@@ -347,18 +345,18 @@ EOF
 	echo "正在创建服务器配置文件 wg0.conf..."
 
 	cat > /etc/wireguard/wg0.conf <<-EOF
-		[Interface]
-		PrivateKey = $s1
-		Address = $server_address
-		ListenPort = $wg_port
-		MTU = 1420
+[Interface]
+PrivateKey = $s1
+Address = $server_address
+ListenPort = $wg_port
+MTU = 1420
 $(echo -e "$postup_cmds" | sed '/^$/d')
 $(echo -e "$predown_cmds" | sed '/^$/d')
 
-		[Peer]
-		# Client: client
-		PublicKey = $c2
-		AllowedIPs = $peer_allowed_ips
+[Peer]
+# Client: client
+PublicKey = $c2
+AllowedIPs = $peer_allowed_ips
 	EOF
 
 	echo "正在创建客户端配置文件 client.conf..."
