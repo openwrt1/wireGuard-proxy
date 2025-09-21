@@ -55,16 +55,16 @@ initial_check() {
     echo "==================== 系统状态检查 ===================="
     echo "当前内核版本: $kernel_version"
     if [[ "$kernel_version" =~ ^[5-9]\. || "$kernel_version" =~ ^[1-9][0-9]+\. ]]; then
-        echo -e "状态: \033[0;32m良好 (推荐内核)\033[0m"
+        echo -e "\033[0;32m良好 (推荐内核)\033[0m"
     else
-        echo -e "状态: \033[0;33m过旧 (建议升级内核以获得最佳性能)\033[0m"
+        echo -e "\033[0;33m过旧 (建议升级内核以获得最佳性能)\033[0m"
     fi
 
     echo "TCP 拥塞控制算法: $bbr_status"
     if [ "$bbr_status" = "bbr" ]; then
-        echo -e "状态: \033[0;32mBBR 已开启\033[0m"
+        echo -e "\033[0;32mBBR 已开启\033[0m"
     else
-        echo -e "状态: \033[0;33mBBR 未开启 (建议开启以优化网络)\033[0m"
+        echo -e "\033[0;33mBBR 未开启 (建议开启以优化网络)\033[0m"
     fi
     echo "======================================================"
     echo
@@ -266,7 +266,7 @@ wireguard_install(){
             read -r -p "请输入 udp2raw 的 IPv4 TCP 端口 [默认: 39001]: " tcp_port_v4
             tcp_port_v4=${tcp_port_v4:-39001}
             echo "TCP_PORT_V4=$tcp_port_v4" >> "$PARAMS_FILE"
-            postup_rules="${postup_rules:+$postup_rules\n}! $IPTABLES_PATH -C INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null && $IPTABLES_PATH -I INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT"
+            postup_rules="${postup_rules:+$postup_rules\n}! $IPTABLES_PATH -C INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null && $IPTABLES_PATH -A INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT"
             predown_rules="${predown_rules:+$predown_rules\n}$IPTABLES_PATH -D INPUT -p tcp --dport $tcp_port_v4 -j ACCEPT 2>/dev/null || true"
             cat > /etc/systemd/system/udp2raw-ipv4.service <<-EOF
 [Unit]
@@ -289,7 +289,7 @@ EOF
             read -r -p "请输入 udp2raw 的 IPv6 TCP 端口 [默认: 39002]: " tcp_port_v6
             tcp_port_v6=${tcp_port_v6:-39002}
             echo "TCP_PORT_V6=$tcp_port_v6" >> "$PARAMS_FILE"
-            postup_rules="${postup_rules:+$postup_rules\n}! $IP6TABLES_PATH -C INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -I INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT"
+            postup_rules="${postup_rules:+$postup_rules\n}! $IP6TABLES_PATH -C INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null && $IP6TABLES_PATH -A INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT"
             predown_rules="${predown_rules:+$predown_rules\n}$IP6TABLES_PATH -D INPUT -p tcp --dport $tcp_port_v6 -j ACCEPT 2>/dev/null || true"
             cat > /etc/systemd/system/udp2raw-ipv6.service <<-EOF
 [Unit]
