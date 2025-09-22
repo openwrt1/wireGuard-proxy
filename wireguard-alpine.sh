@@ -197,16 +197,36 @@ wireguard_install(){
     wg_port=$(rand_port)
 
     local net_interface net_interface_ipv6
+    echo "正在执行高级网络接口检测..."
+
     if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
-        net_interface=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
+        # 优先使用 `ip route get`，它能最准确地模拟内核的路由决策过程
+        net_interface=$(ip -4 route get 8.8.8.8 2>/dev/null | grep -oP 'dev\s+\K[^\s]+' | head -n1)
+        # 如果失败，则回退到解析默认路由表
+        if [ -z "$net_interface" ]; then
+            net_interface=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
+        fi
+        # 最后，作为备用方案，查找带有全局 IP 的接口
+        if [ -z "$net_interface" ]; then
+            net_interface=$(ip -4 addr show scope global | grep -oE 'dev [^ ]+' | awk '{print $2}' | head -n1)
+        fi
+
         if [ -z "$net_interface" ]; then error_exit "无法自动检测到有效的 IPv4 主网络接口。" $LINENO; fi
         echo "检测到 IPv4 主网络接口为: $net_interface"
     fi
+
     if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
-        net_interface_ipv6=$(ip -o -6 route show to default | awk '{print $5}' | head -n1)
+        # 同样，优先使用 `ip route get`
+        net_interface_ipv6=$(ip -6 route get 2001:4860:4860::8888 2>/dev/null | grep -oP 'dev\s+\K[^\s]+' | head -n1)
+        # 回退到解析默认路由
+        if [ -z "$net_interface_ipv6" ]; then
+            net_interface_ipv6=$(ip -o -6 route show to default | awk '{print $5}' | head -n1)
+        fi
+        # 回退到查找有全局 IPv6 的接口
         if [ -z "$net_interface_ipv6" ]; then
             net_interface_ipv6=$(ip -6 addr show scope global | grep -oE 'dev [^ ]+' | awk '{print $2}' | head -n1)
         fi
+
         if [ -z "$net_interface_ipv6" ]; then error_exit "无法自动检测到有效的 IPv6 主网络接口。" $LINENO; fi
         echo "检测到 IPv6 主网络接口为: $net_interface_ipv6"
     fi
@@ -316,8 +336,15 @@ EOF
             echo "USE_UDP2RAW=false";
             echo "WG_PORT=$wg_port";
         } >> "$PARAMS_FILE"
-        postup_cmds="${postup_cmds}PostUp = $IPTABLES_PATH -A INPUT -p udp --dport $wg_port -j ACCEPT\n"
-        predown_cmds="${predown_cmds}PreDown = $IPTABLES_PATH -D INPUT -p udp --dport $wg_port -j ACCEPT\n"
+        
+        if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
+            postup_cmds="${postup_cmds}PostUp = $IPTABLES_PATH -A INPUT -p udp --dport $wg_port -j ACCEPT\n"
+            predown_cmds="${predown_cmds}PreDown = $IPTABLES_PATH -D INPUT -p udp --dport $wg_port -j ACCEPT\n"
+        fi
+        if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
+            postup_cmds="${postup_cmds}PostUp = $IP6TABLES_PATH -A INPUT -p udp --dport $wg_port -j ACCEPT\n"
+            predown_cmds="${predown_cmds}PreDown = $IP6TABLES_PATH -D INPUT -p udp --dport $wg_port -j ACCEPT\n"
+        fi
         
         if [ "$ip_mode" = "ipv4" ]; then client_endpoint="$public_ipv4:$wg_port"; fi
         if [ "$ip_mode" = "ipv6" ]; then client_endpoint="[$public_ipv6]:$wg_port"; fi
@@ -437,6 +464,8 @@ EOF
         printf "  - 检查 IPv6 NAT 规则:   \033[0;32mip6tables -t nat -L POSTROUTING -v -n\033[0m\n"
         if [ "$use_udp2raw" = "y" ] && [ -n "$tcp_port_v6" ]; then
             printf "  - 检查 IPv6 入站规则:   \033[0;32mip6tables -L INPUT -v -n | grep --color=never -E 'dpt:%s'\033[0m\n" "$tcp_port_v6"
+        else
+            printf "  - 检查 IPv6 入站规则:   \033[0;32mip6tables -L INPUT -v -n | grep --color=never -E 'dpt:%s'\033[0m\n" "$wg_port"
         fi
     fi
 }
