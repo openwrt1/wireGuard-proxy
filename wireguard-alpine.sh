@@ -184,7 +184,15 @@ wireguard_install(){
     if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
         if ! grep -q -E "^\s*net.ipv6.conf.all.forwarding\s*=\s*1" /etc/sysctl.conf; then echo "net.ipv6.conf.all.forwarding=1" >> /etc/sysctl.conf; fi
     fi
-    sysctl -p >/dev/null
+    # 立即生效：有些环境 /etc/sysctl.conf 的改动不会被立即加载，使用 sysctl -w 立刻启用转发
+    if [ "$ip_mode" = "ipv4" ] || [ "$ip_mode" = "dual" ]; then
+        sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+    fi
+    if [ "$ip_mode" = "ipv6" ] || [ "$ip_mode" = "dual" ]; then
+        sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1 || true
+    fi
+    # 最后再统一加载 sysctl.conf 确保持久化项被内核读取
+    sysctl -p >/dev/null || true
 
     PARAMS_FILE="/etc/wireguard/params"
     {
